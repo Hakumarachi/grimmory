@@ -12,6 +12,7 @@ import org.booklore.model.dto.komga.KomgaSeriesDto;
 import org.booklore.model.dto.komga.KomgaSeriesSearchRequestDto;
 import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.UserContentRestrictionEntity;
 import org.booklore.repository.BookRepository;
@@ -187,9 +188,8 @@ class KomgaServiceAccessTest {
         seriesIn(1L, "Akira", 101L, 102L);
         seriesIn(1L, "Berserk", 103L);
         BookEntity hidden = books.get(102L);
-        // SQL side: book 103 (the only Berserk book) and 102 are hidden
-        when(bookRepository.findAll(any(Specification.class))).thenReturn(List.of(books.get(101L)));
-        when(komgaMapper.getBookSeriesName(books.get(101L))).thenReturn("Akira");
+        // SQL side: only the hidden books are loaded, 102 (one of two Akira books) and 103 (the only Berserk book)
+        when(bookRepository.findAll(any(Specification.class))).thenReturn(List.of(hidden, books.get(103L)));
         // In memory side: book 102 is hidden
         when(contentRestrictionService.applyRestrictions(anyList(), eq(10L)))
                 .thenAnswer(inv -> ((List<BookEntity>) inv.getArgument(0)).stream().filter(b -> b != hidden).toList());
@@ -201,6 +201,17 @@ class KomgaServiceAccessTest {
             assertThat(series.getName()).isEqualTo("Akira");
             assertThat(series.getBooksCount()).isEqualTo(1);
         });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void userWithoutRestrictionsSkipsRestrictionFiltering() {
+        loginAsUser(1L);
+        seriesIn(1L, "Akira", 101L);
+
+        assertThat(komgaService.getAllSeries(null, 0, 20, false).getContent()).hasSize(1);
+        verify(bookRepository, never()).findAll(any(Specification.class));
+        verifyNoInteractions(contentRestrictionService);
     }
 
     // ==================== Series by id ====================
@@ -228,6 +239,7 @@ class KomgaServiceAccessTest {
     @Test
     void seriesWithOnlyHiddenBooksAnswers404() {
         loginAsUser(1L);
+        restrict();
         seriesIn(1L, "Akira", 101L);
         when(contentRestrictionService.applyRestrictions(anyList(), eq(10L))).thenReturn(List.of());
 
@@ -249,6 +261,7 @@ class KomgaServiceAccessTest {
     @Test
     void bookOfAnotherLibraryOrHiddenOrMissingAnswers404() {
         loginAsUser(1L);
+        restrict();
         BookEntity other = book(201L);
         BookEntity hidden = book(102L);
         when(bookRepository.findByIdWithBookFiles(201L)).thenReturn(Optional.of(other));
@@ -322,6 +335,7 @@ class KomgaServiceAccessTest {
         names.add(name);
         lenient().when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, UNKNOWN)).thenReturn(names);
         List<BookEntity> seriesBooks = java.util.Arrays.stream(bookIds).map(this::book).toList();
+        seriesBooks.forEach(b -> b.setMetadata(BookMetadataEntity.builder().seriesName(name).build()));
         lenient().when(bookRepository.findBooksBySeriesNameGroupedByLibraryId(name, libraryId, UNKNOWN)).thenReturn(seriesBooks);
     }
 

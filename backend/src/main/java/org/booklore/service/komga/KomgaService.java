@@ -99,19 +99,30 @@ public class KomgaService {
 
     /** Removes the books hidden from a non-admin user by their content restrictions. */
     private List<BookEntity> visibleBooks(List<BookEntity> books, KomgaAccess access) {
-        if (access.admin() || books.isEmpty()) {
+        if (!access.restricted() || books.isEmpty()) {
             return books;
         }
         return contentRestrictionService.applyRestrictions(books, access.userId());
     }
 
-    /** Non-deleted books of the given libraries that pass the user's content restrictions. */
-    private Specification<BookEntity> visibleBooksSpec(Collection<Long> libraryIds, KomgaAccess access) {
+    /** Non-deleted books of the given libraries. */
+    private static Specification<BookEntity> booksInLibraries(Collection<Long> libraryIds) {
         Specification<BookEntity> inLibraries = (root, query, cb) ->
                 libraryIds.isEmpty() ? cb.disjunction() : root.get("library").get("id").in(libraryIds);
-        return BookFilterSpecification.notDeleted()
-                .and(inLibraries)
-                .and(ContentRestrictionSpecification.from(access.restrictions()));
+        return BookFilterSpecification.notDeleted().and(inLibraries);
+    }
+
+    /** Non-deleted books of the given libraries that pass the user's content restrictions. */
+    private Specification<BookEntity> visibleBooksSpec(Collection<Long> libraryIds, KomgaAccess access) {
+        return booksInLibraries(libraryIds).and(ContentRestrictionSpecification.from(access.restrictions()));
+    }
+
+    /**
+     * Non-deleted books of the given libraries hidden by the user's content restrictions: the exact
+     * complement of {@link #visibleBooksSpec}, as every restriction is an {@code EXISTS} subquery.
+     */
+    private Specification<BookEntity> hiddenBooksSpec(Collection<Long> libraryIds, KomgaAccess access) {
+        return booksInLibraries(libraryIds).and(Specification.not(ContentRestrictionSpecification.from(access.restrictions())));
     }
 
     /** Loads a book the user may see, or answers 404 (the book's existence is not disclosed). */
@@ -248,13 +259,41 @@ public class KomgaService {
         }
 
         if (access.restricted() && !series.isEmpty()) {
-            Set<SeriesRef> allowed = new HashSet<>();
-            for (BookEntity book : bookRepository.findAll(visibleBooksSpec(libraryIds, access))) {
-                allowed.add(new SeriesRef(komgaMapper.getBookSeriesName(book), book.getLibrary().getId()));
-            }
-            series.removeIf(ref -> !allowed.contains(ref));
+            series.removeAll(fullyHiddenSeries(libraryIds, access, groupUnknown));
         }
         return series;
+    }
+
+    /**
+     * Series whose books are all hidden by the user's content restrictions. Only the hidden books
+     * are loaded (usually a handful), then each series holding one is counted.
+     */
+    private Set<SeriesRef> fullyHiddenSeries(Collection<Long> libraryIds, KomgaAccess access, boolean groupUnknown) {
+        Map<SeriesRef, Integer> hiddenCounts = new HashMap<>();
+        for (BookEntity book : bookRepository.findAll(hiddenBooksSpec(libraryIds, access))) {
+            hiddenCounts.merge(new SeriesRef(seriesNameOf(book, groupUnknown), book.getLibrary().getId()), 1, Integer::sum);
+        }
+        Set<SeriesRef> fullyHidden = new HashSet<>();
+        hiddenCounts.forEach((ref, hidden) -> {
+            if (hidden >= findSeriesBooks(ref, groupUnknown).size()) {
+                fullyHidden.add(ref);
+            }
+        });
+        return fullyHidden;
+    }
+
+    /** Series name of a book, derived like the series name queries do. */
+    private String seriesNameOf(BookEntity book, boolean groupUnknown) {
+        BookMetadataEntity metadata = book.getMetadata();
+        if (metadata != null && metadata.getSeriesName() != null) {
+            return metadata.getSeriesName();
+        }
+        if (groupUnknown) {
+            return komgaMapper.getUnknownSeriesName();
+        }
+        return metadata != null && metadata.getTitle() != null
+                ? metadata.getTitle()
+                : book.getPrimaryBookFile().getFileName();
     }
 
     private List<String> findSeriesNames(Long libraryId, boolean groupUnknown) {
