@@ -26,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
@@ -303,6 +304,19 @@ class KomgaServiceAccessTest {
                 .thenReturn(new PageImpl<>(List.of(book(101L), book(201L)), Pageable.ofSize(20), 2));
 
         assertThat(bookService.getAllBooks(null, 0, 20).getContent()).hasSize(2);
+    }
+
+    @Test
+    void bookListNormalizesInvalidPageAndSize() {
+        loginAsAdmin();
+        when(komgaBookRepository.findAllWithMetadataPaged(PageRequest.of(0, 20)))
+                .thenReturn(new PageImpl<>(List.of(book(101L)), PageRequest.of(0, 20), 1));
+
+        KomgaPageableDto<KomgaBookDto> result = bookService.getAllBooks(null, -1, 0);
+
+        assertThat(result.getNumber()).isZero();
+        assertThat(result.getSize()).isEqualTo(20);
+        assertThat(result.getContent()).hasSize(1);
     }
 
     // ==================== Helpers ====================

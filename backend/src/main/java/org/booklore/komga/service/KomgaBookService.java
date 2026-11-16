@@ -45,7 +45,9 @@ public class KomgaBookService {
     private final KomgaAccessResolver accessResolver;
     private final KomgaContentGateway contentGateway;
 
-    public KomgaPageableDto<KomgaBookDto> getAllBooks(Long libraryId, int page, int size) {
+    public KomgaPageableDto<KomgaBookDto> getAllBooks(Long libraryId, int requestedPage, int requestedSize) {
+        int page = KomgaPaging.pageNumber(requestedPage);
+        int size = KomgaPaging.pageSize(requestedSize);
         KomgaAccess access = accessResolver.current();
         Pageable pageable = PageRequest.of(page, size);
         Page<BookEntity> bookPage;

@@ -50,4 +50,19 @@ class KomgaPagingTest {
         assertThat(page.getNumberOfElements()).isEqualTo(2);
         assertThat(page.getTotalElements()).isEqualTo(5);
     }
+
+    @Test
+    void invalidPageAndSizeAreNormalizedLikeKomga() {
+        assertThat(KomgaPaging.pageNumber(-3)).isZero();
+        assertThat(KomgaPaging.pageSize(0)).isEqualTo(20);
+        assertThat(KomgaPaging.pageSize(-5)).isEqualTo(20);
+        assertThat(KomgaPaging.pageSize(5000)).isEqualTo(2000);
+
+        // Negative page used to fail (negative sub-list index), size 0 used to report Integer.MAX_VALUE pages
+        KomgaPageableDto<Integer> page = KomgaPaging.page(ITEMS, -1, 0, false, Function.identity());
+        assertThat(page.getNumber()).isZero();
+        assertThat(page.getSize()).isEqualTo(20);
+        assertThat(page.getContent()).hasSize(5);
+        assertThat(page.getTotalPages()).isEqualTo(1);
+    }
 }
