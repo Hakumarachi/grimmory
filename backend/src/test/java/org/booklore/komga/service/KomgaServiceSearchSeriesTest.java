@@ -6,8 +6,6 @@ import org.booklore.komga.access.KomgaAccessResolver;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
 import org.booklore.komga.core.KomgaSettingsGateway;
-import org.booklore.komga.core.KomgaShelfGateway;
-import org.booklore.komga.core.KomgaUserGateway;
 import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
@@ -56,19 +54,17 @@ class KomgaServiceSearchSeriesTest {
     @Mock
     private KomgaContentGateway contentGateway;
 
-    @Mock
-    private KomgaShelfGateway shelfGateway;
-
-    @Mock
-    private KomgaUserGateway userGateway;
-
-    private KomgaService komgaService;
+    private KomgaLibraryService libraryService;
+    private KomgaSeriesService seriesService;
+    private KomgaBookService bookService;
 
     @BeforeEach
     void setUp() {
-        komgaService = new KomgaService(komgaBookRepository, komgaLibraryRepository, komgaMapper,
-                new KomgaAccessResolver(accessGateway, komgaBookRepository), settings,
-                contentGateway, shelfGateway, userGateway);
+        KomgaAccessResolver accessResolver = new KomgaAccessResolver(accessGateway, komgaBookRepository);
+        libraryService = new KomgaLibraryService(komgaLibraryRepository, komgaMapper, accessResolver);
+        seriesService = new KomgaSeriesService(new KomgaSeriesFinder(komgaBookRepository, accessResolver),
+                komgaMapper, accessResolver, settings, contentGateway);
+        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway);
         lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         lenient().when(settings.groupUnknown()).thenReturn(true);
         BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
@@ -92,7 +88,7 @@ class KomgaServiceSearchSeriesTest {
     void returnsAllSeriesWhenRequestIsEmpty() {
         when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("Akira", "Berserk", "Claymore"));
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, null, 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(null, null, 0, 20, false);
 
         assertThat(names(result)).containsExactly("Akira", "Berserk", "Claymore");
         assertThat(result.getTotalElements()).isEqualTo(3);
@@ -114,7 +110,7 @@ class KomgaServiceSearchSeriesTest {
                 "fullTextSearch":"l\\\\'eleve"}
                 """);
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(request, "relevance,desc", 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(request, "relevance,desc", 0, 20, false);
 
         assertThat(names(result)).containsExactly("L'Élève Ducobu");
         verify(komgaBookRepository, never()).findDistinctSeriesNamesGrouped(any());
@@ -125,7 +121,7 @@ class KomgaServiceSearchSeriesTest {
         when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN))
                 .thenReturn(List.of("One Piece", "One Punch Man", "Piece of Cake"));
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(
                 request("{\"fullTextSearch\":\"PIECE one\"}"), null, 0, 20, false);
 
         assertThat(names(result)).containsExactly("One Piece");
@@ -144,7 +140,7 @@ class KomgaServiceSearchSeriesTest {
                 ]}]}}
                 """);
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(request, "metadata.titleSort,asc", 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(request, "metadata.titleSort,asc", 0, 20, false);
 
         assertThat(names(result)).containsExactly("Asterix", "Blame!", "Coco", "Dorohedoro");
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getLibraryId).containsExactly("3", "1", "3", "1");
@@ -155,7 +151,7 @@ class KomgaServiceSearchSeriesTest {
     void sortsByTitleDescending() {
         when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("A", "B", "C"));
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, "metadata.titleSort,desc", 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(null, "metadata.titleSort,desc", 0, 20, false);
 
         assertThat(names(result)).containsExactly("C", "B", "A");
     }
@@ -172,8 +168,8 @@ class KomgaServiceSearchSeriesTest {
                 bookWithoutSeries(1L, "Loose", "2026-01-02T12:00:00Z")      // grouped as "Unknown Series"
         ));
 
-        KomgaPageableDto<KomgaSeriesDto> latest = komgaService.searchSeries(null, "lastModifiedDate,desc", 0, 20, false);
-        KomgaPageableDto<KomgaSeriesDto> created = komgaService.searchSeries(null, "createdDate,asc", 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> latest = seriesService.searchSeries(null, "lastModifiedDate,desc", 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> created = seriesService.searchSeries(null, "createdDate,asc", 0, 20, false);
 
         // across libraries, "Old" spans 2026-01-01 .. 2026-01-03
         assertThat(names(latest)).containsExactly("Old", "Unknown Series", "Recent");
@@ -190,7 +186,7 @@ class KomgaServiceSearchSeriesTest {
         ));
         when(komgaBookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of());
 
-        KomgaPageableDto<KomgaSeriesDto> latest = komgaService.searchSeries(
+        KomgaPageableDto<KomgaSeriesDto> latest = seriesService.searchSeries(
                 request("{\"condition\":{\"libraryId\":{\"operator\":\"is\",\"value\":\"1\"}}}"),
                 "lastModifiedDate,desc", 0, 20, false);
 
@@ -208,7 +204,7 @@ class KomgaServiceSearchSeriesTest {
                 bookWithoutSeries(1L, null, "2026-01-05T00:00:00Z", "a-file.cbz")
         ));
 
-        KomgaPageableDto<KomgaSeriesDto> latest = komgaService.searchSeries(null, "lastModifiedDate,desc", 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> latest = seriesService.searchSeries(null, "lastModifiedDate,desc", 0, 20, false);
 
         assertThat(names(latest)).containsExactly("a-file.cbz", "Standalone");
     }
@@ -217,7 +213,7 @@ class KomgaServiceSearchSeriesTest {
     void paginatesFilteredResults() {
         when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("S1", "S2", "S3", "S4", "S5"));
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, null, 1, 2, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(null, null, 1, 2, false);
 
         assertThat(names(result)).containsExactly("S3", "S4");
         assertThat(result.getTotalElements()).isEqualTo(5);
@@ -236,15 +232,15 @@ class KomgaServiceSearchSeriesTest {
                 ]}
                 """);
 
-        assertThat(KomgaService.collectLibraryIds(condition)).containsExactly(5L);
-        assertThat(KomgaService.collectLibraryIds(null)).isEmpty();
+        assertThat(KomgaSeriesSearch.collectLibraryIds(condition)).containsExactly(5L);
+        assertThat(KomgaSeriesSearch.collectLibraryIds(null)).isEmpty();
     }
 
     @Test
     void searchTermsAreUnescapedAndNormalized() {
-        assertThat(KomgaService.searchTerms("  Spy\\-Family  \\(Édition\\) ")).containsExactly("spy-family", "(edition)");
-        assertThat(KomgaService.searchTerms("   ")).isEmpty();
-        assertThat(KomgaService.searchTerms(null)).isEmpty();
+        assertThat(KomgaSeriesSearch.searchTerms("  Spy\\-Family  \\(Édition\\) ")).containsExactly("spy-family", "(edition)");
+        assertThat(KomgaSeriesSearch.searchTerms("   ")).isEmpty();
+        assertThat(KomgaSeriesSearch.searchTerms(null)).isEmpty();
     }
 
     private static KomgaSeriesSearchRequestDto request(String json) {

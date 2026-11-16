@@ -6,8 +6,6 @@ import org.booklore.komga.access.KomgaAccessResolver;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
 import org.booklore.komga.core.KomgaSettingsGateway;
-import org.booklore.komga.core.KomgaShelfGateway;
-import org.booklore.komga.core.KomgaUserGateway;
 import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
@@ -71,22 +69,20 @@ class KomgaServiceAccessTest {
     @Mock
     private KomgaContentGateway contentGateway;
 
-    @Mock
-    private KomgaShelfGateway shelfGateway;
-
-    @Mock
-    private KomgaUserGateway userGateway;
-
-    private KomgaService komgaService;
+    private KomgaLibraryService libraryService;
+    private KomgaSeriesService seriesService;
+    private KomgaBookService bookService;
 
     /** Books by id; book ids 1xx are in library 1, 2xx in library 2. */
     private final Map<Long, BookEntity> books = new HashMap<>();
 
     @BeforeEach
     void setUp() {
-        komgaService = new KomgaService(komgaBookRepository, komgaLibraryRepository, komgaMapper,
-                new KomgaAccessResolver(accessGateway, komgaBookRepository), settings,
-                contentGateway, shelfGateway, userGateway);
+        KomgaAccessResolver accessResolver = new KomgaAccessResolver(accessGateway, komgaBookRepository);
+        libraryService = new KomgaLibraryService(komgaLibraryRepository, komgaMapper, accessResolver);
+        seriesService = new KomgaSeriesService(new KomgaSeriesFinder(komgaBookRepository, accessResolver),
+                komgaMapper, accessResolver, settings, contentGateway);
+        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway);
         lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         lenient().when(settings.groupUnknown()).thenReturn(true);
         lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any()))
@@ -111,7 +107,7 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         when(komgaLibraryRepository.findAll()).thenReturn(List.of(library(1L), library(2L)));
 
-        assertThat(komgaService.getAllLibraries()).extracting(KomgaLibraryDto::getId).containsExactly("1");
+        assertThat(libraryService.getAllLibraries()).extracting(KomgaLibraryDto::getId).containsExactly("1");
     }
 
     @Test
@@ -119,7 +115,7 @@ class KomgaServiceAccessTest {
         loginAsAdmin();
         when(komgaLibraryRepository.findAll()).thenReturn(List.of(library(1L), library(2L)));
 
-        assertThat(komgaService.getAllLibraries()).extracting(KomgaLibraryDto::getId).containsExactly("1", "2");
+        assertThat(libraryService.getAllLibraries()).extracting(KomgaLibraryDto::getId).containsExactly("1", "2");
     }
 
     @Test
@@ -127,8 +123,8 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         when(komgaLibraryRepository.findById(2L)).thenReturn(Optional.of(library(2L)));
 
-        assertNotFound(() -> komgaService.getLibraryById(2L));
-        assertNotFound(() -> komgaService.getLibraryById(3L));
+        assertNotFound(() -> libraryService.getLibraryById(2L));
+        assertNotFound(() -> libraryService.getLibraryById(3L));
     }
 
     // ==================== Series lists ====================
@@ -137,7 +133,7 @@ class KomgaServiceAccessTest {
     void seriesOfAnotherLibraryAreNotListed() {
         loginAsUser(1L);
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(2L, 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.getAllSeries(2L, 0, 20, false);
 
         assertThat(result.getContent()).isEmpty();
         assertThat(result.getTotalElements()).isZero();
@@ -149,7 +145,7 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         seriesIn(1L, "Akira", 101L);
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(null, 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.getAllSeries(null, 0, 20, false);
 
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getName).containsExactly("Akira");
         verify(komgaBookRepository, never()).findDistinctSeriesNamesGrouped(anyString());
@@ -166,7 +162,7 @@ class KomgaServiceAccessTest {
                         """))
                 .build();
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(request, null, 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(request, null, 0, 20, false);
 
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getLibraryId).containsExactly("1");
         verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
@@ -177,7 +173,7 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         seriesIn(1L, "Akira", 101L);
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, null, 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.searchSeries(null, null, 0, 20, false);
 
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getName).containsExactly("Akira");
         verify(komgaBookRepository, never()).findDistinctSeriesNamesGrouped(anyString());
@@ -197,7 +193,7 @@ class KomgaServiceAccessTest {
         when(accessGateway.applyRestrictions(anyList(), eq(10L)))
                 .thenAnswer(inv -> ((List<BookEntity>) inv.getArgument(0)).stream().filter(b -> b != hidden).toList());
 
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(null, 0, 20, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.getAllSeries(null, 0, 20, false);
 
         assertThat(result.getTotalElements()).isEqualTo(1);
         assertThat(result.getContent()).singleElement().satisfies(series -> {
@@ -212,7 +208,7 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         seriesIn(1L, "Akira", 101L);
 
-        assertThat(komgaService.getAllSeries(null, 0, 20, false).getContent()).hasSize(1);
+        assertThat(seriesService.getAllSeries(null, 0, 20, false).getContent()).hasSize(1);
         verify(komgaBookRepository, never()).findAll(any(Specification.class));
         verify(accessGateway, never()).applyRestrictions(any(), any());
     }
@@ -223,8 +219,8 @@ class KomgaServiceAccessTest {
     void seriesOfAnotherLibraryAnswers404AndHasNoBooks() {
         loginAsUser(1L);
 
-        assertNotFound(() -> komgaService.getSeriesById("2-berserk"));
-        assertThat(komgaService.getBooksBySeries("2-berserk", 0, 20, false).getContent()).isEmpty();
+        assertNotFound(() -> seriesService.getSeriesById("2-berserk"));
+        assertThat(seriesService.getBooksBySeries("2-berserk", 0, 20, false).getContent()).isEmpty();
         verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
     }
 
@@ -233,10 +229,10 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         seriesIn(1L, "Akira", 101L);
 
-        assertNotFound(() -> komgaService.getSeriesById("akira"));
-        assertNotFound(() -> komgaService.getSeriesById("x-akira"));
-        assertNotFound(() -> komgaService.getSeriesById("1-unknown"));
-        assertThat(komgaService.getBooksBySeries("x-akira", 0, 20, false).getContent()).isEmpty();
+        assertNotFound(() -> seriesService.getSeriesById("akira"));
+        assertNotFound(() -> seriesService.getSeriesById("x-akira"));
+        assertNotFound(() -> seriesService.getSeriesById("1-unknown"));
+        assertThat(seriesService.getBooksBySeries("x-akira", 0, 20, false).getContent()).isEmpty();
     }
 
     @Test
@@ -246,7 +242,7 @@ class KomgaServiceAccessTest {
         seriesIn(1L, "Akira", 101L);
         when(accessGateway.applyRestrictions(anyList(), eq(10L))).thenReturn(List.of());
 
-        assertNotFound(() -> komgaService.getSeriesById("1-akira"));
+        assertNotFound(() -> seriesService.getSeriesById("1-akira"));
     }
 
     @Test
@@ -254,8 +250,8 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         seriesIn(1L, "Akira", 101L, 102L);
 
-        assertThat(komgaService.getSeriesById("1-akira").getName()).isEqualTo("Akira");
-        assertThat(komgaService.getBooksBySeries("1-akira", 0, 20, false).getContent())
+        assertThat(seriesService.getSeriesById("1-akira").getName()).isEqualTo("Akira");
+        assertThat(seriesService.getBooksBySeries("1-akira", 0, 20, false).getContent())
                 .extracting(KomgaBookDto::getId).containsExactly("101", "102");
     }
 
@@ -271,11 +267,11 @@ class KomgaServiceAccessTest {
         when(komgaBookRepository.findByIdWithBookFiles(102L)).thenReturn(Optional.of(hidden));
         when(accessGateway.applyRestrictions(List.of(hidden), 10L)).thenReturn(List.of());
 
-        assertNotFound(() -> komgaService.getBookById(201L));
-        assertNotFound(() -> komgaService.getBookPages(201L));
-        assertNotFound(() -> komgaService.getBookPageImage(201L, 1, false));
-        assertNotFound(() -> komgaService.getBookById(102L));
-        assertNotFound(() -> komgaService.getBookById(999L));
+        assertNotFound(() -> bookService.getBookById(201L));
+        assertNotFound(() -> bookService.getBookPages(201L));
+        assertNotFound(() -> bookService.getBookPageImage(201L, 1, false));
+        assertNotFound(() -> bookService.getBookById(102L));
+        assertNotFound(() -> bookService.getBookById(999L));
     }
 
     @Test
@@ -283,7 +279,7 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         when(komgaBookRepository.findByIdWithBookFiles(101L)).thenReturn(Optional.of(book(101L)));
 
-        assertThat(komgaService.getBookById(101L).getId()).isEqualTo("101");
+        assertThat(bookService.getBookById(101L).getId()).isEqualTo("101");
     }
 
     @Test
@@ -293,7 +289,7 @@ class KomgaServiceAccessTest {
         Page<BookEntity> page = new PageImpl<>(List.of(book(101L)), Pageable.ofSize(20), 1);
         when(komgaBookRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
 
-        KomgaPageableDto<KomgaBookDto> result = komgaService.getAllBooks(null, 0, 20);
+        KomgaPageableDto<KomgaBookDto> result = bookService.getAllBooks(null, 0, 20);
 
         assertThat(result.getContent()).extracting(KomgaBookDto::getId).containsExactly("101");
         verify(komgaBookRepository, never()).findAllWithMetadataPaged(any());
@@ -306,7 +302,7 @@ class KomgaServiceAccessTest {
         when(komgaBookRepository.findAllWithMetadataPaged(any()))
                 .thenReturn(new PageImpl<>(List.of(book(101L), book(201L)), Pageable.ofSize(20), 2));
 
-        assertThat(komgaService.getAllBooks(null, 0, 20).getContent()).hasSize(2);
+        assertThat(bookService.getAllBooks(null, 0, 20).getContent()).hasSize(2);
     }
 
     // ==================== Helpers ====================

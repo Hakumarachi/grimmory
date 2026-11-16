@@ -5,8 +5,6 @@ import org.booklore.komga.access.KomgaAccessResolver;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
 import org.booklore.komga.core.KomgaSettingsGateway;
-import org.booklore.komga.core.KomgaShelfGateway;
-import org.booklore.komga.core.KomgaUserGateway;
 import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
@@ -57,22 +55,20 @@ class KomgaServiceTest {
     @Mock
     private KomgaContentGateway contentGateway;
 
-    @Mock
-    private KomgaShelfGateway shelfGateway;
-
-    @Mock
-    private KomgaUserGateway userGateway;
-
-    private KomgaService komgaService;
+    private KomgaLibraryService libraryService;
+    private KomgaSeriesService seriesService;
+    private KomgaBookService bookService;
 
     private LibraryEntity library;
     private List<BookEntity> seriesBooks;
 
     @BeforeEach
     void setUp() {
-        komgaService = new KomgaService(komgaBookRepository, komgaLibraryRepository, komgaMapper,
-                new KomgaAccessResolver(accessGateway, komgaBookRepository), settings,
-                contentGateway, shelfGateway, userGateway);
+        KomgaAccessResolver accessResolver = new KomgaAccessResolver(accessGateway, komgaBookRepository);
+        libraryService = new KomgaLibraryService(komgaLibraryRepository, komgaMapper, accessResolver);
+        seriesService = new KomgaSeriesService(new KomgaSeriesFinder(komgaBookRepository, accessResolver),
+                komgaMapper, accessResolver, settings, contentGateway);
+        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway);
         lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         library = new LibraryEntity();
         library.setId(1L);
@@ -132,7 +128,7 @@ class KomgaServiceTest {
         }
 
         // When: Request with unpaged=true
-        KomgaPageableDto<KomgaBookDto> result = komgaService.getBooksBySeries("1-test-series", 0, 20, true);
+        KomgaPageableDto<KomgaBookDto> result = seriesService.getBooksBySeries("1-test-series", 0, 20, true);
 
         // Then: Should return all 50 books
         assertThat(result).isNotNull();
@@ -162,7 +158,7 @@ class KomgaServiceTest {
         }
 
         // When: Request with unpaged=false and page size 20
-        KomgaPageableDto<KomgaBookDto> result = komgaService.getBooksBySeries("1-test-series", 0, 20, false);
+        KomgaPageableDto<KomgaBookDto> result = seriesService.getBooksBySeries("1-test-series", 0, 20, false);
 
         // Then: Should return first page with 20 books
         assertThat(result).isNotNull();
@@ -188,7 +184,7 @@ class KomgaServiceTest {
         when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
 
         // When: Get book pages
-        List<KomgaPageDto> pages = komgaService.getBookPages(100L);
+        List<KomgaPageDto> pages = bookService.getBookPages(100L);
 
         // Then: Should return empty list without throwing NPE
         assertThat(pages).isNotNull();
@@ -210,7 +206,7 @@ class KomgaServiceTest {
         when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
 
         // When: Get book pages
-        List<KomgaPageDto> pages = komgaService.getBookPages(100L);
+        List<KomgaPageDto> pages = bookService.getBookPages(100L);
 
         // Then: Should return 5 pages
         assertThat(pages).isNotNull();
@@ -241,7 +237,7 @@ class KomgaServiceTest {
                 .thenReturn(KomgaSeriesDto.builder().id("1-series-b").name("Series B").booksCount(2).build());
         
         // When: Request first page with size 2
-        KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(1L, 0, 2, false);
+        KomgaPageableDto<KomgaSeriesDto> result = seriesService.getAllSeries(1L, 0, 2, false);
         
         // Then: Should return only 2 series (not all 3)
         assertThat(result).isNotNull();
