@@ -91,7 +91,7 @@ public class KomgaBookService {
     }
 
     /**
-     * Pages of the book: for comics and PDFs, the real pages of the file (names, and dimensions for comics);
+     * Pages of the book: for comics and PDFs, the real pages of the file (with their names for comics);
      * otherwise, or when the file cannot be read, numbered pages from the known page count.
      */
     public List<KomgaPageDto> getBookPages(Long bookId) {
@@ -107,8 +107,6 @@ public class KomgaBookService {
                                     .number(page.number())
                                     .fileName(page.fileName())
                                     .mediaType("image/jpeg")
-                                    .width(page.width())
-                                    .height(page.height())
                                     .build())
                             .toList();
                 }

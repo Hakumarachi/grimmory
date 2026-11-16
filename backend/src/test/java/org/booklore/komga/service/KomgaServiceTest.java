@@ -221,20 +221,18 @@ class KomgaServiceTest {
         assertThat(pages.get(4).getNumber()).isEqualTo(5);
     }
     @Test
-    void comicPagesComeFromTheFileWithNamesAndSizes() {
+    void comicPagesComeFromTheFileWithTheirNames() {
         BookEntity book = comicBook(5);
         when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
         when(contentGateway.pages(100L, BookFileType.CBX)).thenReturn(List.of(
-                new KomgaContentGateway.PageInfo(1, "001", 800, 1200),
-                new KomgaContentGateway.PageInfo(2, "002", null, null)));
+                new KomgaContentGateway.PageInfo(1, "001"),
+                new KomgaContentGateway.PageInfo(2, "002")));
 
         List<KomgaPageDto> pages = bookService.getBookPages(100L);
 
         assertThat(pages).hasSize(2);
         assertThat(pages.get(0).getFileName()).isEqualTo("001");
-        assertThat(pages.get(0).getWidth()).isEqualTo(800);
-        assertThat(pages.get(0).getHeight()).isEqualTo(1200);
-        assertThat(pages.get(1).getWidth()).isNull();
+        assertThat(pages.get(1).getFileName()).isEqualTo("002");
     }
 
     @Test
