@@ -14,8 +14,8 @@ import org.booklore.komga.progress.KomgaProgressReader;
 import org.booklore.komga.progress.ProgressSnapshot;
 import org.booklore.komga.repository.KomgaBookRepository;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -90,12 +90,35 @@ public class KomgaBookService {
         return komgaMapper.toKomgaBookDto(book, progressReader.load(access, List.of(book)).of(book));
     }
 
+    /**
+     * Pages of the book: for comics and PDFs, the real pages of the file (names, and dimensions for comics);
+     * otherwise, or when the file cannot be read, numbered pages from the known page count.
+     */
     public List<KomgaPageDto> getBookPages(Long bookId) {
         BookEntity book = accessResolver.requireVisibleBook(bookId);
 
-        BookMetadataEntity metadata = book.getMetadata();
-        Integer pageCount = metadata != null && metadata.getPageCount() != null ? metadata.getPageCount() : 0;
+        BookFileEntity file = book.getPrimaryBookFile();
+        if (file != null) {
+            try {
+                List<KomgaContentGateway.PageInfo> pages = contentGateway.pages(book.getId(), file.getBookType());
+                if (pages != null && !pages.isEmpty()) {
+                    return pages.stream()
+                            .map(page -> KomgaPageDto.builder()
+                                    .number(page.number())
+                                    .fileName(page.fileName())
+                                    .mediaType("image/jpeg")
+                                    .width(page.width())
+                                    .height(page.height())
+                                    .build())
+                            .toList();
+                }
+            } catch (RuntimeException e) {
+                log.warn("Could not read the pages of book {}, using its page count", bookId, e);
+            }
+        }
 
+        BookMetadataEntity metadata = book.getMetadata();
+        int pageCount = metadata != null && metadata.getPageCount() != null ? metadata.getPageCount() : 0;
         List<KomgaPageDto> pages = new ArrayList<>();
         for (int i = 1; i <= pageCount; i++) {
             pages.add(KomgaPageDto.builder()
@@ -112,7 +135,8 @@ public class KomgaBookService {
         accessResolver.requireVisibleBook(bookId);
     }
 
-    public Resource getBookPageImage(Long bookId, Integer pageNumber, boolean convertToPng) throws IOException {
+    /** Bytes of a page image, as stored in the file (or converted to PNG). */
+    public byte[] getBookPageImage(Long bookId, Integer pageNumber, boolean convertToPng) throws IOException {
         log.debug("Getting page {} from book {} (convert to PNG: {})", pageNumber, bookId, convertToPng);
 
         BookEntity book = accessResolver.requireVisibleBook(bookId);
@@ -125,7 +149,7 @@ public class KomgaBookService {
         if (convertToPng) {
             imageData = convertImageToPng(imageData);
         }
-        return new ByteArrayResource(imageData);
+        return imageData;
     }
 
     /** Thumbnail of a book the user may see; {@code null} when the book has none. */

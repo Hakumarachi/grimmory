@@ -220,6 +220,42 @@ class KomgaServiceTest {
         assertThat(pages.get(0).getNumber()).isEqualTo(1);
         assertThat(pages.get(4).getNumber()).isEqualTo(5);
     }
+    @Test
+    void comicPagesComeFromTheFileWithNamesAndSizes() {
+        BookEntity book = comicBook(5);
+        when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
+        when(contentGateway.pages(100L, BookFileType.CBX)).thenReturn(List.of(
+                new KomgaContentGateway.PageInfo(1, "001", 800, 1200),
+                new KomgaContentGateway.PageInfo(2, "002", null, null)));
+
+        List<KomgaPageDto> pages = bookService.getBookPages(100L);
+
+        assertThat(pages).hasSize(2);
+        assertThat(pages.get(0).getFileName()).isEqualTo("001");
+        assertThat(pages.get(0).getWidth()).isEqualTo(800);
+        assertThat(pages.get(0).getHeight()).isEqualTo(1200);
+        assertThat(pages.get(1).getWidth()).isNull();
+    }
+
+    @Test
+    void unreadableFileFallsBackToThePageCount() {
+        BookEntity book = comicBook(3);
+        when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
+        when(contentGateway.pages(100L, BookFileType.CBX)).thenThrow(new IllegalStateException("broken archive"));
+
+        assertThat(bookService.getBookPages(100L)).extracting(KomgaPageDto::getFileName)
+                .containsExactly("page-1", "page-2", "page-3");
+    }
+
+    private static BookEntity comicBook(int pageCount) {
+        BookEntity book = new BookEntity();
+        book.setId(100L);
+        book.setMetadata(BookMetadataEntity.builder().title("Comic").pageCount(pageCount).build());
+        book.setBookFiles(new java.util.HashSet<>(java.util.Set.of(
+                BookFileEntity.builder().id(100L).book(book).bookType(BookFileType.CBX).isBookFormat(true).build())));
+        return book;
+    }
+
 
     @Test
     void shouldGetAllSeriesOptimized() {

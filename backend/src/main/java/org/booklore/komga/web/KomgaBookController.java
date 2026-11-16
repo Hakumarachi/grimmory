@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.komga.config.ConditionalOnKomgaEnabled;
 import org.booklore.komga.service.KomgaBookService;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -57,13 +58,12 @@ public class KomgaBookController {
 
         try {
             boolean convertToPng = "png".equalsIgnoreCase(convert);
-            Resource pageImage = bookService.getBookPageImage(bookId, pageNumber, convertToPng);
-            // Note: When not converting, we assume JPEG as most CBZ files contain JPEG images,
-            // but the actual format may vary (PNG, WebP, etc.)
-            String contentType = convertToPng ? "image/png" : "image/jpeg";
+            byte[] pageImage = bookService.getBookPageImage(bookId, pageNumber, convertToPng);
+            // Pages are served as stored in the archive (JPEG, PNG, WebP...): tell the real type
+            String contentType = convertToPng ? "image/png" : KomgaImageTypes.detect(pageImage);
             return ResponseEntity.ok()
                     .header("Content-Type", contentType)
-                    .body(pageImage);
+                    .body(new ByteArrayResource(pageImage));
         } catch (Exception e) {
             log.error("Failed to get page {} from book {}", pageNumber, bookId, e);
             return ResponseEntity.notFound().build();
