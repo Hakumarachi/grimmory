@@ -18,6 +18,7 @@ import org.booklore.model.dto.komga.KomgaBookDto;
 import org.booklore.model.dto.komga.KomgaLibraryDto;
 import org.booklore.model.dto.komga.KomgaPageableDto;
 import org.booklore.model.dto.komga.KomgaSeriesDto;
+import org.booklore.model.dto.komga.KomgaSeriesSearchRequestDto;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookLoreUserEntity;
 import org.booklore.service.book.BookService;
@@ -105,6 +106,20 @@ public class KomgaController {
             @Parameter(description = "Return all books without paging") @RequestParam(defaultValue = "false") boolean unpaged) {
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(libraryId, page, size, unpaged);
         return writeJson(result);
+    }
+
+    @Operation(summary = "Search series",
+            description = "Komga 1.19+ search API, used by Komga clients such as Mihon to browse and search. " +
+                    "Supports libraryId conditions, fullTextSearch on the series name and sorting by " +
+                    "metadata.titleSort, relevance, createdDate, lastModifiedDate or random. Other conditions are ignored.")
+    @PostMapping("/v1/series/list")
+    public ResponseEntity<String> searchSeries(
+            @RequestBody(required = false) KomgaSeriesSearchRequestDto request,
+            @Parameter(description = "Sort, e.g. metadata.titleSort,asc") @RequestParam(required = false) String sort,
+            @Parameter(description = "Page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "Return all series without paging") @RequestParam(defaultValue = "false") boolean unpaged) {
+        return writeJson(komgaService.searchSeries(request, sort, page, size, unpaged));
     }
 
     @Operation(summary = "Get series details")
@@ -246,6 +261,15 @@ public class KomgaController {
         return writeJson(komgaService.getCollections(page, size, unpaged));
     }
 
+    // ==================== Referential (filters) ====================
+
+    @Operation(summary = "List genres, tags, publishers or authors",
+            description = "Not tracked by Grimmory: always returns an empty list so Komga clients can load their filters.")
+    @GetMapping({"/v1/genres", "/v1/tags", "/v1/publishers", "/v1/authors"})
+    public ResponseEntity<String> getEmptyReferential() {
+        return writeJson(List.of());
+    }
+
     @Operation(summary = "Unimplemented Komga API Endpoints")
     @ApiResponse(responseCode = "501", description = "Not Implemented")
     @RequestMapping(
@@ -253,7 +277,6 @@ public class KomgaController {
                     "/v1/readlists",
                     "/v1/series/new",
                     "/v1/series/updated",
-                    "/v1/series/list",
                     "/v1/series/genres",
                     "/v1/books/ondeck",
                     "/v1/books/list",

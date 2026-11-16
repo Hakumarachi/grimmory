@@ -13,6 +13,7 @@ import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.repository.projection.KomgaSeriesDateProjection;
 import org.booklore.service.MagicShelfService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.reader.CbxReaderService;
@@ -25,12 +26,15 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.text.Normalizer;
+import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -41,6 +45,8 @@ import java.util.regex.Pattern;
 public class KomgaService {
 
     private static final Pattern NON_ALPHANUMERIC_PATTERN = Pattern.compile("[^a-z0-9]+");
+    private static final Pattern LUCENE_ESCAPE_PATTERN = Pattern.compile("\\\\(.)");
+    private static final Pattern DIACRITICS_PATTERN = Pattern.compile("\\p{M}+");
     private final BookRepository bookRepository;
     private final LibraryRepository libraryRepository;
     private final KomgaMapper komgaMapper;
@@ -97,41 +103,99 @@ public class KomgaService {
 
     public KomgaPageableDto<KomgaSeriesDto> getAllSeries(Long libraryId, int page, int size, boolean unpaged) {
         log.debug("Getting all series for libraryId: {}, page: {}, size: {}", libraryId, page, size);
-        
-        // Check if we should group unknown series
+
         boolean groupUnknown = appSettingService.getAppSettings().isKomgaGroupUnknown();
-        
+
         // Get distinct series names directly from database (MUCH faster than loading all books)
-        List<String> sortedSeriesNames;
-        if (groupUnknown) {
-            // Use optimized query that groups books without series as "Unknown Series"
-            if (libraryId != null) {
-                sortedSeriesNames = bookRepository.findDistinctSeriesNamesGroupedByLibraryId(
-                    libraryId, komgaMapper.getUnknownSeriesName());
-            } else {
-                sortedSeriesNames = bookRepository.findDistinctSeriesNamesGrouped(
-                    komgaMapper.getUnknownSeriesName());
-            }
+        List<SeriesRef> series = findSeriesNames(libraryId, groupUnknown).stream()
+                .map(name -> new SeriesRef(name, libraryId))
+                .toList();
+
+        log.debug("Found {} distinct series names from database (optimized)", series.size());
+
+        return buildSeriesPage(series, page, size, unpaged, groupUnknown);
+    }
+
+    /**
+     * Komga {@code POST /api/v1/series/list}: search series with a condition tree,
+     * a full text search term and a sort.
+     * <p>
+     * Supported: {@code libraryId} conditions (any {@code allOf}/{@code anyOf} nesting, operator {@code is}),
+     * {@code fullTextSearch} (case and accent insensitive match of every term on the series name),
+     * sorts {@code metadata.titleSort}, {@code name}, {@code relevance}, {@code createdDate},
+     * {@code lastModifiedDate} and {@code random}. Other conditions are ignored.
+     */
+    public KomgaPageableDto<KomgaSeriesDto> searchSeries(KomgaSeriesSearchRequestDto request, String sort,
+                                                         int page, int size, boolean unpaged) {
+        boolean groupUnknown = appSettingService.getAppSettings().isKomgaGroupUnknown();
+
+        Set<Long> libraryIds = request != null ? collectLibraryIds(request.getCondition()) : Set.of();
+        List<String> terms = searchTerms(request != null ? request.getFullTextSearch() : null);
+
+        List<SeriesRef> series = new ArrayList<>();
+        if (libraryIds.isEmpty()) {
+            findSeriesNames(null, groupUnknown).forEach(name -> series.add(new SeriesRef(name, null)));
         } else {
-            // Use query that gives each book without series its own entry
-            if (libraryId != null) {
-                sortedSeriesNames = bookRepository.findDistinctSeriesNamesUngroupedByLibraryId(libraryId);
-            } else {
-                sortedSeriesNames = bookRepository.findDistinctSeriesNamesUngrouped();
+            for (Long libraryId : libraryIds) {
+                findSeriesNames(libraryId, groupUnknown).forEach(name -> series.add(new SeriesRef(name, libraryId)));
+            }
+            if (libraryIds.size() > 1) {
+                series.sort(Comparator.comparing(SeriesRef::name, String.CASE_INSENSITIVE_ORDER));
             }
         }
-        
-        log.debug("Found {} distinct series names from database (optimized)", sortedSeriesNames.size());
-        
-        // Calculate pagination
-        int totalElements = sortedSeriesNames.size();
-        List<String> pageSeriesNames;
+
+        if (!terms.isEmpty()) {
+            series.removeIf(ref -> {
+                String name = normalizeForSearch(ref.name());
+                return terms.stream().anyMatch(term -> !name.contains(term));
+            });
+        }
+
+        sortSeries(series, sort, groupUnknown);
+
+        log.debug("Komga series search: libraries={}, terms={}, sort={}, matches={}", libraryIds, terms, sort, series.size());
+
+        return buildSeriesPage(series, page, size, unpaged, groupUnknown);
+    }
+
+    /** A Komga series: its name, and the library it is scoped to ({@code null} = all libraries). */
+    private record SeriesRef(String name, Long libraryId) {}
+
+    private List<String> findSeriesNames(Long libraryId, boolean groupUnknown) {
+        if (groupUnknown) {
+            // Books without series are grouped as "Unknown Series"
+            return libraryId != null
+                    ? bookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, komgaMapper.getUnknownSeriesName())
+                    : bookRepository.findDistinctSeriesNamesGrouped(komgaMapper.getUnknownSeriesName());
+        }
+        // Each book without series gets its own entry
+        return libraryId != null
+                ? bookRepository.findDistinctSeriesNamesUngroupedByLibraryId(libraryId)
+                : bookRepository.findDistinctSeriesNamesUngrouped();
+    }
+
+    private List<BookEntity> findSeriesBooks(SeriesRef series, boolean groupUnknown) {
+        if (series.libraryId() != null) {
+            return groupUnknown
+                    ? bookRepository.findBooksBySeriesNameGroupedByLibraryId(series.name(), series.libraryId(), komgaMapper.getUnknownSeriesName())
+                    : bookRepository.findBooksBySeriesNameUngroupedByLibraryId(series.name(), series.libraryId());
+        }
+        // For all libraries without library filter
+        return groupUnknown
+                ? bookRepository.findBooksBySeriesNameGrouped(series.name(), komgaMapper.getUnknownSeriesName())
+                : bookRepository.findBooksBySeriesNameUngrouped(series.name());
+    }
+
+    private KomgaPageableDto<KomgaSeriesDto> buildSeriesPage(List<SeriesRef> series, int page, int size,
+                                                             boolean unpaged, boolean groupUnknown) {
+        int totalElements = series.size();
+        List<SeriesRef> pageSeries;
         int actualPage;
         int actualSize;
         int totalPages;
-        
+
         if (unpaged) {
-            pageSeriesNames = sortedSeriesNames;
+            pageSeries = series;
             actualPage = 0;
             actualSize = totalElements;
             totalPages = totalElements > 0 ? 1 : 0;
@@ -139,50 +203,31 @@ public class KomgaService {
             totalPages = (int) Math.ceil((double) totalElements / size);
             int fromIndex = Math.min(page * size, totalElements);
             int toIndex = Math.min(fromIndex + size, totalElements);
-            
-            pageSeriesNames = sortedSeriesNames.subList(fromIndex, toIndex);
+
+            pageSeries = series.subList(fromIndex, toIndex);
             actualPage = page;
             actualSize = size;
         }
-        
+
         // Now load books only for the series on this page (optimized - only loads what's needed)
         List<KomgaSeriesDto> content = new ArrayList<>();
-        for (String seriesName : pageSeriesNames) {
+        for (SeriesRef ref : pageSeries) {
             try {
-                // Load only the books for this specific series
-                List<BookEntity> seriesBooks;
-                if (libraryId != null) {
-                    if (groupUnknown) {
-                        seriesBooks = bookRepository.findBooksBySeriesNameGroupedByLibraryId(
-                            seriesName, libraryId, komgaMapper.getUnknownSeriesName());
-                    } else {
-                        seriesBooks = bookRepository.findBooksBySeriesNameUngroupedByLibraryId(
-                            seriesName, libraryId);
-                    }
-                } else {
-                    // For all libraries without library filter
-                    if (groupUnknown) {
-                        seriesBooks = bookRepository.findBooksBySeriesNameGrouped(
-                            seriesName, komgaMapper.getUnknownSeriesName());
-                    } else {
-                        seriesBooks = bookRepository.findBooksBySeriesNameUngrouped(seriesName);
-                    }
-                }
-                
+                List<BookEntity> seriesBooks = findSeriesBooks(ref, groupUnknown);
                 if (!seriesBooks.isEmpty()) {
                     Long libId = seriesBooks.getFirst().getLibrary().getId();
-                    KomgaSeriesDto seriesDto = komgaMapper.toKomgaSeriesDto(seriesName, libId, seriesBooks);
+                    KomgaSeriesDto seriesDto = komgaMapper.toKomgaSeriesDto(ref.name(), libId, seriesBooks);
                     if (seriesDto != null) {
                         content.add(seriesDto);
                     }
                 }
             } catch (Exception e) {
-                log.error("Error mapping series: {}", seriesName, e);
+                log.error("Error mapping series: {}", ref.name(), e);
             }
         }
-        
+
         log.debug("Mapped {} series DTOs for this page", content.size());
-        
+
         return KomgaPageableDto.<KomgaSeriesDto>builder()
                 .content(content)
                 .number(actualPage)
@@ -194,6 +239,121 @@ public class KomgaService {
                 .last(totalElements == 0 || actualPage >= totalPages - 1)
                 .empty(content.isEmpty())
                 .build();
+    }
+
+    /** Collects the values of every {@code libraryId} leaf with operator {@code is}, at any depth. */
+    static Set<Long> collectLibraryIds(JsonNode condition) {
+        Set<Long> ids = new LinkedHashSet<>();
+        collectLibraryIds(condition, ids);
+        return ids;
+    }
+
+    private static void collectLibraryIds(JsonNode node, Set<Long> ids) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return;
+        }
+        if (node.isArray()) {
+            node.forEach(child -> collectLibraryIds(child, ids));
+            return;
+        }
+        if (!node.isObject()) {
+            return;
+        }
+        JsonNode libraryId = node.get("libraryId");
+        if (libraryId != null && libraryId.isObject() && "is".equals(libraryId.path("operator").asString(""))) {
+            try {
+                ids.add(Long.parseLong(libraryId.path("value").asString("").trim()));
+            } catch (NumberFormatException e) {
+                log.debug("Ignoring non-numeric Komga libraryId condition: {}", libraryId);
+            }
+        }
+        collectLibraryIds(node.get("allOf"), ids);
+        collectLibraryIds(node.get("anyOf"), ids);
+    }
+
+    /** Splits a Komga full text search (Lucene-escaped) into normalized terms. */
+    static List<String> searchTerms(String fullTextSearch) {
+        if (fullTextSearch == null || fullTextSearch.isBlank()) {
+            return List.of();
+        }
+        String unescaped = LUCENE_ESCAPE_PATTERN.matcher(fullTextSearch).replaceAll("$1");
+        return Arrays.stream(normalizeForSearch(unescaped).split("\\s+"))
+                .filter(term -> !term.isBlank())
+                .toList();
+    }
+
+    private static String normalizeForSearch(String value) {
+        if (value == null) {
+            return "";
+        }
+        String decomposed = Normalizer.normalize(value, Normalizer.Form.NFD);
+        return DIACRITICS_PATTERN.matcher(decomposed).replaceAll("").toLowerCase(Locale.ROOT);
+    }
+
+    private void sortSeries(List<SeriesRef> series, String sort, boolean groupUnknown) {
+        String field = null;
+        boolean descending = false;
+        if (sort != null && !sort.isBlank()) {
+            String[] parts = sort.split(",");
+            field = parts[0].trim();
+            descending = parts.length > 1 && "desc".equalsIgnoreCase(parts[1].trim());
+        }
+
+        if (field == null) {
+            return; // keep database order (series name ascending)
+        }
+
+        switch (field) {
+            case "random" -> Collections.shuffle(series);
+            case "createdDate", "lastModifiedDate" -> {
+                Map<SeriesRef, Instant[]> dates = seriesDates(groupUnknown);
+                int index = "createdDate".equals(field) ? 0 : 1;
+                Comparator<SeriesRef> byDate = Comparator.comparing(
+                        ref -> {
+                            Instant[] d = dates.get(ref);
+                            return d != null ? d[index] : null;
+                        },
+                        Comparator.nullsFirst(Comparator.<Instant>naturalOrder()));
+                // Stable sort: series with the same date keep their name order
+                series.sort(descending ? byDate.reversed() : byDate);
+            }
+            default -> {
+                // metadata.titleSort, name, relevance...: series are already sorted by name
+                if (descending) {
+                    Collections.reverse(series);
+                }
+            }
+        }
+    }
+
+    /**
+     * Computes {created = oldest book added, lastModified = newest book added} for every series,
+     * keyed both per library and across all libraries (libraryId {@code null}).
+     */
+    private Map<SeriesRef, Instant[]> seriesDates(boolean groupUnknown) {
+        String unknownSeriesName = groupUnknown ? komgaMapper.getUnknownSeriesName() : null;
+        Map<SeriesRef, Instant[]> dates = new HashMap<>();
+        for (KomgaSeriesDateProjection row : bookRepository.findKomgaSeriesDateRows()) {
+            String name;
+            if (row.getSeriesName() != null) {
+                name = row.getSeriesName();
+            } else if (groupUnknown) {
+                name = unknownSeriesName;
+            } else {
+                name = row.getTitle() != null ? row.getTitle() : row.getFileName();
+            }
+            Instant addedOn = row.getAddedOn();
+            if (name == null || addedOn == null) {
+                continue;
+            }
+            for (SeriesRef key : List.of(new SeriesRef(name, row.getLibraryId()), new SeriesRef(name, null))) {
+                dates.merge(key, new Instant[]{addedOn, addedOn}, (a, b) -> new Instant[]{
+                        a[0].isBefore(b[0]) ? a[0] : b[0],
+                        a[1].isAfter(b[1]) ? a[1] : b[1]
+                });
+            }
+        }
+        return dates;
     }
 
     public KomgaSeriesDto getSeriesById(String seriesId) {

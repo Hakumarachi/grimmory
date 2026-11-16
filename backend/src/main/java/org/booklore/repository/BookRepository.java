@@ -8,6 +8,7 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.projection.BookCoverUpdateProjection;
+import org.booklore.repository.projection.KomgaSeriesDateProjection;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
@@ -353,6 +354,31 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
             ORDER BY seriesName
             """)
     List<String> findDistinctSeriesNamesUngrouped();
+
+    /**
+     * One row per non-deleted book with the fields needed to derive its Komga series name
+     * (series name, title, first book-format file name) and its added date.
+     * Used to sort Komga series by created / last modified date.
+     */
+    @Query("""
+            SELECT b.library.id as libraryId,
+                   m.seriesName as seriesName,
+                   m.title as title,
+                   (
+                       SELECT bf2.fileName FROM BookFileEntity bf2
+                       WHERE bf2.book = b
+                         AND bf2.isBookFormat = true
+                         AND bf2.id = (
+                             SELECT MIN(bf3.id) FROM BookFileEntity bf3
+                             WHERE bf3.book = b AND bf3.isBookFormat = true
+                         )
+                   ) as fileName,
+                   b.addedOn as addedOn
+            FROM BookEntity b
+            LEFT JOIN b.metadata m
+            WHERE (b.deleted IS NULL OR b.deleted = false)
+            """)
+    List<KomgaSeriesDateProjection> findKomgaSeriesDateRows();
 
     /**
      * Find books by series name for a library when groupUnknown=true.

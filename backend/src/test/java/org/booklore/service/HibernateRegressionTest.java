@@ -634,6 +634,87 @@ class HibernateRegressionTest {
     }
 
     @Nested
+    class KomgaSeriesDateRows {
+
+        @Test
+        void findKomgaSeriesDateRows_returnsSeriesTitleFirstFileAndSkipsDeleted() {
+            LibraryEntity library = LibraryEntity.builder()
+                    .name("Komga Dates Library")
+                    .icon("book")
+                    .watch(false)
+                    .build();
+            entityManager.persist(library);
+
+            LibraryPathEntity libraryPath = LibraryPathEntity.builder()
+                    .library(library)
+                    .path("/komga")
+                    .build();
+            entityManager.persist(libraryPath);
+            entityManager.flush();
+
+            Instant seriesAdded = Instant.parse("2026-01-01T00:00:00Z");
+            Instant looseAdded = Instant.parse("2026-01-02T00:00:00Z");
+            persistBook(library, libraryPath, "Series A", "Tome 1", "a1.cbz", seriesAdded, false);
+            persistBook(library, libraryPath, null, null, "loose.cbz", looseAdded, false);
+            persistBook(library, libraryPath, "Deleted Series", "Gone", "gone.cbz", Instant.now(), true);
+            entityManager.flush();
+            entityManager.clear();
+
+            var rows = bookRepository.findKomgaSeriesDateRows().stream()
+                    .filter(r -> library.getId().equals(r.getLibraryId()))
+                    .toList();
+
+            assertThat(rows).hasSize(2);
+            assertThat(rows).anySatisfy(r -> {
+                assertThat(r.getSeriesName()).isEqualTo("Series A");
+                assertThat(r.getTitle()).isEqualTo("Tome 1");
+                assertThat(r.getFileName()).isEqualTo("a1.cbz");
+                assertThat(r.getAddedOn()).isEqualTo(seriesAdded);
+            });
+            assertThat(rows).anySatisfy(r -> {
+                assertThat(r.getSeriesName()).isNull();
+                assertThat(r.getTitle()).isNull();
+                assertThat(r.getFileName()).isEqualTo("loose.cbz");
+                assertThat(r.getAddedOn()).isEqualTo(looseAdded);
+            });
+        }
+
+        private void persistBook(LibraryEntity library, LibraryPathEntity libraryPath, String seriesName,
+                                 String title, String fileName, Instant addedOn, boolean deleted) {
+            BookEntity book = BookEntity.builder()
+                    .library(library)
+                    .libraryPath(libraryPath)
+                    .addedOn(addedOn)
+                    .deleted(deleted)
+                    .bookFiles(new HashSet<>())
+                    .build();
+
+            BookFileEntity bookFile = BookFileEntity.builder()
+                    .book(book)
+                    .fileName(fileName)
+                    .fileSubPath("")
+                    .isBookFormat(true)
+                    .bookType(BookFileType.CBX)
+                    .fileSizeKb(100L)
+                    .initialHash("hash-" + fileName)
+                    .currentHash("hash-" + fileName)
+                    .addedOn(addedOn)
+                    .build();
+            book.getBookFiles().add(bookFile);
+
+            if (title != null) { // title is NOT NULL: "no title" means no metadata row at all
+                book.setMetadata(BookMetadataEntity.builder()
+                        .book(book)
+                        .seriesName(seriesName)
+                        .title(title)
+                        .build());
+            }
+
+            entityManager.persist(book);
+        }
+    }
+
+    @Nested
     class BookCreationFlow {
 
         /**
