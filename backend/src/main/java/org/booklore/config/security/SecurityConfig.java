@@ -100,27 +100,7 @@ public class SecurityConfig {
         return http.build();
     }
 
-    @Bean
-    @Order(2)
-    public SecurityFilterChain komgaBasicAuthSecurityChain(HttpSecurity http) throws Exception {
-        http
-                .securityMatcher("/komga/api/v1/**", "/komga/api/v2/**")
-                .csrf(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        .anyRequest().authenticated()
-                )
-                .httpBasic(basic -> basic
-                        .realmName("Grimmory Komga API")
-                        .authenticationEntryPoint((request, response, authException) -> {
-                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                            response.setHeader("WWW-Authenticate", "Basic realm=\"Grimmory Komga API\"");
-                            response.getWriter().write("HTTP Status 401 - " + authException.getMessage());
-                        })
-                );
-
-        return http.build();
-    }
+    // @Order(2) is the Komga API chain: org.booklore.komga.config.KomgaSecurityConfig
 
     @Bean
     @Order(3)
