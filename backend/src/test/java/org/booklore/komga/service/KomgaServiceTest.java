@@ -16,6 +16,7 @@ import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookRepository;
+import org.booklore.komga.repository.KomgaBookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.MagicShelfService;
 import org.booklore.service.appsettings.AppSettingService;
@@ -43,6 +44,9 @@ class KomgaServiceTest {
 
     @Mock
     private BookRepository bookRepository;
+
+    @Mock
+    private KomgaBookRepository komgaBookRepository;
 
     @Mock
     private LibraryRepository libraryRepository;
@@ -122,9 +126,9 @@ class KomgaServiceTest {
     void shouldReturnAllBooksWhenUnpagedIsTrue() {
         // Given
         when(komgaMapper.getUnknownSeriesName()).thenReturn("Unknown Series");
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, "Unknown Series"))
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, "Unknown Series"))
                 .thenReturn(List.of("Test Series"));
-        when(bookRepository.findBooksBySeriesNameGroupedByLibraryId("Test Series", 1L, "Unknown Series"))
+        when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Test Series", 1L, "Unknown Series"))
                 .thenReturn(seriesBooks);
         
         // Mock the mapper to return DTOs
@@ -152,9 +156,9 @@ class KomgaServiceTest {
     void shouldReturnPagedBooksWhenUnpagedIsFalse() {
         // Given
         when(komgaMapper.getUnknownSeriesName()).thenReturn("Unknown Series");
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, "Unknown Series"))
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, "Unknown Series"))
                 .thenReturn(List.of("Test Series"));
-        when(bookRepository.findBooksBySeriesNameGroupedByLibraryId("Test Series", 1L, "Unknown Series"))
+        when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Test Series", 1L, "Unknown Series"))
                 .thenReturn(seriesBooks);
         
         // Mock the mapper to return DTOs (only for the books that will be used)
@@ -229,16 +233,16 @@ class KomgaServiceTest {
     void shouldGetAllSeriesOptimized() {
         // Given: Mock the optimized repository method
         List<String> seriesNames = List.of("Series A", "Series B", "Series C");
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(anyLong(), anyString()))
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(anyLong(), anyString()))
                 .thenReturn(seriesNames);
         
         // Mock books for the first page (Series A and Series B only)
         List<BookEntity> seriesABooks = List.of(seriesBooks.get(0), seriesBooks.get(1));
         List<BookEntity> seriesBBooks = List.of(seriesBooks.get(2), seriesBooks.get(3));
         
-        when(bookRepository.findBooksBySeriesNameGroupedByLibraryId("Series A", 1L, "Unknown Series"))
+        when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Series A", 1L, "Unknown Series"))
                 .thenReturn(seriesABooks);
-        when(bookRepository.findBooksBySeriesNameGroupedByLibraryId("Series B", 1L, "Unknown Series"))
+        when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Series B", 1L, "Unknown Series"))
                 .thenReturn(seriesBBooks);
         
         when(komgaMapper.getUnknownSeriesName()).thenReturn("Unknown Series");

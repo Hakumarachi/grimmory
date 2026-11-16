@@ -1,4 +1,4 @@
-package org.booklore.repository.projection;
+package org.booklore.komga.repository;
 
 import java.time.Instant;
 

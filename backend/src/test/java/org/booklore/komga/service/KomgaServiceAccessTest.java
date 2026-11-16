@@ -16,6 +16,7 @@ import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.UserContentRestrictionEntity;
 import org.booklore.repository.BookRepository;
+import org.booklore.komga.repository.KomgaBookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.service.appsettings.AppSettingService;
@@ -55,6 +56,9 @@ class KomgaServiceAccessTest {
 
     @Mock
     private BookRepository bookRepository;
+
+    @Mock
+    private KomgaBookRepository komgaBookRepository;
 
     @Mock
     private LibraryRepository libraryRepository;
@@ -138,7 +142,7 @@ class KomgaServiceAccessTest {
 
         assertThat(result.getContent()).isEmpty();
         assertThat(result.getTotalElements()).isZero();
-        verify(bookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(anyLong(), anyString());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(anyLong(), anyString());
     }
 
     @Test
@@ -149,8 +153,8 @@ class KomgaServiceAccessTest {
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(null, 0, 20, false);
 
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getName).containsExactly("Akira");
-        verify(bookRepository, never()).findDistinctSeriesNamesGrouped(anyString());
-        verify(bookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGrouped(anyString());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
     }
 
     @Test
@@ -166,7 +170,7 @@ class KomgaServiceAccessTest {
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(request, null, 0, 20, false);
 
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getLibraryId).containsExactly("1");
-        verify(bookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
     }
 
     @Test
@@ -177,7 +181,7 @@ class KomgaServiceAccessTest {
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, null, 0, 20, false);
 
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getName).containsExactly("Akira");
-        verify(bookRepository, never()).findDistinctSeriesNamesGrouped(anyString());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGrouped(anyString());
     }
 
     @Test
@@ -189,7 +193,7 @@ class KomgaServiceAccessTest {
         seriesIn(1L, "Berserk", 103L);
         BookEntity hidden = books.get(102L);
         // SQL side: only the hidden books are loaded, 102 (one of two Akira books) and 103 (the only Berserk book)
-        when(bookRepository.findAll(any(Specification.class))).thenReturn(List.of(hidden, books.get(103L)));
+        when(komgaBookRepository.findAll(any(Specification.class))).thenReturn(List.of(hidden, books.get(103L)));
         // In memory side: book 102 is hidden
         when(contentRestrictionService.applyRestrictions(anyList(), eq(10L)))
                 .thenAnswer(inv -> ((List<BookEntity>) inv.getArgument(0)).stream().filter(b -> b != hidden).toList());
@@ -210,7 +214,7 @@ class KomgaServiceAccessTest {
         seriesIn(1L, "Akira", 101L);
 
         assertThat(komgaService.getAllSeries(null, 0, 20, false).getContent()).hasSize(1);
-        verify(bookRepository, never()).findAll(any(Specification.class));
+        verify(komgaBookRepository, never()).findAll(any(Specification.class));
         verifyNoInteractions(contentRestrictionService);
     }
 
@@ -222,7 +226,7 @@ class KomgaServiceAccessTest {
 
         assertNotFound(() -> komgaService.getSeriesById("2-berserk"));
         assertThat(komgaService.getBooksBySeries("2-berserk", 0, 20, false).getContent()).isEmpty();
-        verify(bookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), anyString());
     }
 
     @Test
@@ -288,19 +292,19 @@ class KomgaServiceAccessTest {
     void bookListOfNonAdminIsFilteredInSql() {
         loginAsUser(1L);
         Page<BookEntity> page = new PageImpl<>(List.of(book(101L)), Pageable.ofSize(20), 1);
-        when(bookRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
+        when(komgaBookRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
 
         KomgaPageableDto<KomgaBookDto> result = komgaService.getAllBooks(null, 0, 20);
 
         assertThat(result.getContent()).extracting(KomgaBookDto::getId).containsExactly("101");
-        verify(bookRepository, never()).findAllWithMetadataPaged(any());
-        verify(bookRepository, never()).findAllWithMetadataByLibraryIdPaged(anyLong(), any());
+        verify(komgaBookRepository, never()).findAllWithMetadataPaged(any());
+        verify(komgaBookRepository, never()).findAllWithMetadataByLibraryIdPaged(anyLong(), any());
     }
 
     @Test
     void bookListOfAdminKeepsTheFastQueries() {
         loginAsAdmin();
-        when(bookRepository.findAllWithMetadataPaged(any()))
+        when(komgaBookRepository.findAllWithMetadataPaged(any()))
                 .thenReturn(new PageImpl<>(List.of(book(101L), book(201L)), Pageable.ofSize(20), 2));
 
         assertThat(komgaService.getAllBooks(null, 0, 20).getContent()).hasSize(2);
@@ -331,12 +335,12 @@ class KomgaServiceAccessTest {
     /** Declares a series of library {@code libraryId} made of the given books. */
     private void seriesIn(Long libraryId, String name, Long... bookIds) {
         List<String> names = new java.util.ArrayList<>(
-                Optional.ofNullable(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, UNKNOWN)).orElse(List.of()));
+                Optional.ofNullable(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, UNKNOWN)).orElse(List.of()));
         names.add(name);
-        lenient().when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, UNKNOWN)).thenReturn(names);
+        lenient().when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, UNKNOWN)).thenReturn(names);
         List<BookEntity> seriesBooks = java.util.Arrays.stream(bookIds).map(this::book).toList();
         seriesBooks.forEach(b -> b.setMetadata(BookMetadataEntity.builder().seriesName(name).build()));
-        lenient().when(bookRepository.findBooksBySeriesNameGroupedByLibraryId(name, libraryId, UNKNOWN)).thenReturn(seriesBooks);
+        lenient().when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(name, libraryId, UNKNOWN)).thenReturn(seriesBooks);
     }
 
     private BookEntity book(Long id) {

@@ -17,8 +17,9 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.UserContentRestrictionRepository;
-import org.booklore.repository.projection.KomgaBookWithoutSeriesProjection;
-import org.booklore.repository.projection.KomgaSeriesDatesProjection;
+import org.booklore.komga.repository.KomgaBookRepository;
+import org.booklore.komga.repository.KomgaBookWithoutSeriesProjection;
+import org.booklore.komga.repository.KomgaSeriesDatesProjection;
 import org.booklore.security.policy.ContentRestrictionSpecification;
 import org.booklore.service.MagicShelfService;
 import org.booklore.service.appsettings.AppSettingService;
@@ -56,6 +57,7 @@ public class KomgaService {
     private static final Pattern LUCENE_ESCAPE_PATTERN = Pattern.compile("\\\\(.)");
     private static final Pattern DIACRITICS_PATTERN = Pattern.compile("\\p{M}+");
     private final BookRepository bookRepository;
+    private final KomgaBookRepository komgaBookRepository;
     private final LibraryRepository libraryRepository;
     private final KomgaMapper komgaMapper;
     private final MagicShelfService magicShelfService;
@@ -270,7 +272,7 @@ public class KomgaService {
      */
     private Set<SeriesRef> fullyHiddenSeries(Collection<Long> libraryIds, KomgaAccess access, boolean groupUnknown) {
         Map<SeriesRef, Integer> hiddenCounts = new HashMap<>();
-        for (BookEntity book : bookRepository.findAll(hiddenBooksSpec(libraryIds, access))) {
+        for (BookEntity book : komgaBookRepository.findAll(hiddenBooksSpec(libraryIds, access))) {
             hiddenCounts.merge(new SeriesRef(seriesNameOf(book, groupUnknown), book.getLibrary().getId()), 1, Integer::sum);
         }
         Set<SeriesRef> fullyHidden = new HashSet<>();
@@ -300,25 +302,25 @@ public class KomgaService {
         if (groupUnknown) {
             // Books without series are grouped as "Unknown Series"
             return libraryId != null
-                    ? bookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, komgaMapper.getUnknownSeriesName())
-                    : bookRepository.findDistinctSeriesNamesGrouped(komgaMapper.getUnknownSeriesName());
+                    ? komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, komgaMapper.getUnknownSeriesName())
+                    : komgaBookRepository.findDistinctSeriesNamesGrouped(komgaMapper.getUnknownSeriesName());
         }
         // Each book without series gets its own entry
         return libraryId != null
-                ? bookRepository.findDistinctSeriesNamesUngroupedByLibraryId(libraryId)
-                : bookRepository.findDistinctSeriesNamesUngrouped();
+                ? komgaBookRepository.findDistinctSeriesNamesUngroupedByLibraryId(libraryId)
+                : komgaBookRepository.findDistinctSeriesNamesUngrouped();
     }
 
     private List<BookEntity> findSeriesBooks(SeriesRef series, boolean groupUnknown) {
         if (series.libraryId() != null) {
             return groupUnknown
-                    ? bookRepository.findBooksBySeriesNameGroupedByLibraryId(series.name(), series.libraryId(), komgaMapper.getUnknownSeriesName())
-                    : bookRepository.findBooksBySeriesNameUngroupedByLibraryId(series.name(), series.libraryId());
+                    ? komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(series.name(), series.libraryId(), komgaMapper.getUnknownSeriesName())
+                    : komgaBookRepository.findBooksBySeriesNameUngroupedByLibraryId(series.name(), series.libraryId());
         }
         // For all libraries without library filter
         return groupUnknown
-                ? bookRepository.findBooksBySeriesNameGrouped(series.name(), komgaMapper.getUnknownSeriesName())
-                : bookRepository.findBooksBySeriesNameUngrouped(series.name());
+                ? komgaBookRepository.findBooksBySeriesNameGrouped(series.name(), komgaMapper.getUnknownSeriesName())
+                : komgaBookRepository.findBooksBySeriesNameUngrouped(series.name());
     }
 
     private KomgaPageableDto<KomgaSeriesDto> buildSeriesPage(List<SeriesRef> series, int page, int size,
@@ -477,12 +479,12 @@ public class KomgaService {
      */
     private Map<SeriesRef, SeriesDates> seriesDates(boolean groupUnknown) {
         Map<SeriesRef, SeriesDates> dates = new HashMap<>();
-        for (KomgaSeriesDatesProjection row : bookRepository.findKomgaSeriesDates()) {
+        for (KomgaSeriesDatesProjection row : komgaBookRepository.findKomgaSeriesDates()) {
             addSeriesDates(dates, row.getSeriesName(), row.getLibraryId(), row.getCreatedDate(), row.getLastModifiedDate());
         }
 
         String unknownSeriesName = groupUnknown ? komgaMapper.getUnknownSeriesName() : null;
-        for (KomgaBookWithoutSeriesProjection row : bookRepository.findKomgaBooksWithoutSeries()) {
+        for (KomgaBookWithoutSeriesProjection row : komgaBookRepository.findKomgaBooksWithoutSeries()) {
             String name = groupUnknown
                     ? unknownSeriesName
                     : (row.getTitle() != null ? row.getTitle() : row.getFileName());
@@ -602,11 +604,11 @@ public class KomgaService {
             // Only accessible libraries, minus books hidden by content restrictions (filtered in SQL so counts stay right)
             Set<Long> libraryIds = libraryId == null ? access.libraryIds()
                     : access.canSeeLibrary(libraryId) ? Set.of(libraryId) : Set.of();
-            bookPage = bookRepository.findAll(visibleBooksSpec(libraryIds, access), pageable);
+            bookPage = komgaBookRepository.findAll(visibleBooksSpec(libraryIds, access), pageable);
         } else if (libraryId != null) {
-            bookPage = bookRepository.findAllWithMetadataByLibraryIdPaged(libraryId, pageable);
+            bookPage = komgaBookRepository.findAllWithMetadataByLibraryIdPaged(libraryId, pageable);
         } else {
-            bookPage = bookRepository.findAllWithMetadataPaged(pageable);
+            bookPage = komgaBookRepository.findAllWithMetadataPaged(pageable);
         }
         
         List<KomgaBookDto> content = bookPage.getContent().stream()

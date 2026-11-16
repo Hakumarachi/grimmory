@@ -11,8 +11,9 @@ import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.repository.BookRepository;
-import org.booklore.repository.projection.KomgaBookWithoutSeriesProjection;
-import org.booklore.repository.projection.KomgaSeriesDatesProjection;
+import org.booklore.komga.repository.KomgaBookRepository;
+import org.booklore.komga.repository.KomgaBookWithoutSeriesProjection;
+import org.booklore.komga.repository.KomgaSeriesDatesProjection;
 import org.booklore.service.appsettings.AppSettingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,9 @@ class KomgaServiceSearchSeriesTest {
 
     @Mock
     private BookRepository bookRepository;
+
+    @Mock
+    private KomgaBookRepository komgaBookRepository;
 
     @Mock
     private KomgaMapper komgaMapper;
@@ -66,9 +70,9 @@ class KomgaServiceSearchSeriesTest {
         lenient().when(komgaMapper.getUnknownSeriesName()).thenReturn(UNKNOWN);
 
         // Every series has one book in library 1, mapped to a DTO carrying its name
-        lenient().when(bookRepository.findBooksBySeriesNameGrouped(anyString(), eq(UNKNOWN)))
+        lenient().when(komgaBookRepository.findBooksBySeriesNameGrouped(anyString(), eq(UNKNOWN)))
                 .thenAnswer(inv -> List.of(book(1L)));
-        lenient().when(bookRepository.findBooksBySeriesNameGroupedByLibraryId(anyString(), anyLong(), eq(UNKNOWN)))
+        lenient().when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(anyString(), anyLong(), eq(UNKNOWN)))
                 .thenAnswer(inv -> List.of(book(inv.getArgument(1))));
         lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any()))
                 .thenAnswer(inv -> KomgaSeriesDto.builder()
@@ -79,7 +83,7 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void returnsAllSeriesWhenRequestIsEmpty() {
-        when(bookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("Akira", "Berserk", "Claymore"));
+        when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("Akira", "Berserk", "Claymore"));
 
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, null, 0, 20, false);
 
@@ -91,7 +95,7 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void parsesMihonRequestAndFiltersByLibraryAndSearchTerm() {
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(2L, UNKNOWN))
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(2L, UNKNOWN))
                 .thenReturn(List.of("008 Apprenti Espion", "Les Vieux Fourneaux", "L'Élève Ducobu"));
 
         // Body exactly as sent by the Mihon Komga extension (search term Lucene-escaped)
@@ -106,12 +110,12 @@ class KomgaServiceSearchSeriesTest {
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(request, "relevance,desc", 0, 20, false);
 
         assertThat(names(result)).containsExactly("L'Élève Ducobu");
-        verify(bookRepository, never()).findDistinctSeriesNamesGrouped(any());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGrouped(any());
     }
 
     @Test
     void everySearchTermMustMatch() {
-        when(bookRepository.findDistinctSeriesNamesGrouped(UNKNOWN))
+        when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN))
                 .thenReturn(List.of("One Piece", "One Punch Man", "Piece of Cake"));
 
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(
@@ -122,8 +126,8 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void mergesSeveralLibrariesSortedByName() {
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, UNKNOWN)).thenReturn(List.of("Blame!", "Dorohedoro"));
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(3L, UNKNOWN)).thenReturn(List.of("Asterix", "Coco"));
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, UNKNOWN)).thenReturn(List.of("Blame!", "Dorohedoro"));
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(3L, UNKNOWN)).thenReturn(List.of("Asterix", "Coco"));
 
         KomgaSeriesSearchRequestDto request = request("""
                 {"condition":{"allOf":[{"anyOf":[
@@ -137,12 +141,12 @@ class KomgaServiceSearchSeriesTest {
 
         assertThat(names(result)).containsExactly("Asterix", "Blame!", "Coco", "Dorohedoro");
         assertThat(result.getContent()).extracting(KomgaSeriesDto::getLibraryId).containsExactly("3", "1", "3", "1");
-        verify(bookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), any());
+        verify(komgaBookRepository, never()).findDistinctSeriesNamesGroupedByLibraryId(eq(2L), any());
     }
 
     @Test
     void sortsByTitleDescending() {
-        when(bookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("A", "B", "C"));
+        when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("A", "B", "C"));
 
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, "metadata.titleSort,desc", 0, 20, false);
 
@@ -151,13 +155,13 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void sortsByLastModifiedDateDescendingForLatestUpdates() {
-        when(bookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("Old", "Recent", "Unknown Series"));
-        when(bookRepository.findKomgaSeriesDates()).thenReturn(List.of(
+        when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("Old", "Recent", "Unknown Series"));
+        when(komgaBookRepository.findKomgaSeriesDates()).thenReturn(List.of(
                 seriesDates(1L, "Old", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
                 seriesDates(2L, "Old", "2026-01-02T00:00:00Z", "2026-01-03T00:00:00Z"), // same series in another library
                 seriesDates(1L, "Recent", "2026-01-02T00:00:00Z", "2026-01-02T00:00:00Z")
         ));
-        when(bookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of(
+        when(komgaBookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of(
                 bookWithoutSeries(1L, "Loose", "2026-01-02T12:00:00Z")      // grouped as "Unknown Series"
         ));
 
@@ -171,13 +175,13 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void datesAreScopedPerLibraryWhenFilteringByLibrary() {
-        when(bookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, UNKNOWN)).thenReturn(List.of("Old", "Recent"));
-        when(bookRepository.findKomgaSeriesDates()).thenReturn(List.of(
+        when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, UNKNOWN)).thenReturn(List.of("Old", "Recent"));
+        when(komgaBookRepository.findKomgaSeriesDates()).thenReturn(List.of(
                 seriesDates(1L, "Old", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
                 seriesDates(2L, "Old", "2026-01-03T00:00:00Z", "2026-01-03T00:00:00Z"), // ignored: other library
                 seriesDates(1L, "Recent", "2026-01-02T00:00:00Z", "2026-01-02T00:00:00Z")
         ));
-        when(bookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of());
+        when(komgaBookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of());
 
         KomgaPageableDto<KomgaSeriesDto> latest = komgaService.searchSeries(
                 request("{\"condition\":{\"libraryId\":{\"operator\":\"is\",\"value\":\"1\"}}}"),
@@ -191,10 +195,10 @@ class KomgaServiceSearchSeriesTest {
         AppSettings appSettings = new AppSettings();
         appSettings.setKomgaGroupUnknown(false);
         when(appSettingService.getAppSettings()).thenReturn(appSettings);
-        when(bookRepository.findDistinctSeriesNamesUngrouped()).thenReturn(List.of("a-file.cbz", "Standalone"));
-        when(bookRepository.findBooksBySeriesNameUngrouped(anyString())).thenAnswer(inv -> List.of(book(1L)));
-        when(bookRepository.findKomgaSeriesDates()).thenReturn(List.of());
-        when(bookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of(
+        when(komgaBookRepository.findDistinctSeriesNamesUngrouped()).thenReturn(List.of("a-file.cbz", "Standalone"));
+        when(komgaBookRepository.findBooksBySeriesNameUngrouped(anyString())).thenAnswer(inv -> List.of(book(1L)));
+        when(komgaBookRepository.findKomgaSeriesDates()).thenReturn(List.of());
+        when(komgaBookRepository.findKomgaBooksWithoutSeries()).thenReturn(List.of(
                 bookWithoutSeries(1L, "Standalone", "2026-01-01T00:00:00Z"),
                 bookWithoutSeries(1L, null, "2026-01-05T00:00:00Z", "a-file.cbz")
         ));
@@ -206,7 +210,7 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void paginatesFilteredResults() {
-        when(bookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("S1", "S2", "S3", "S4", "S5"));
+        when(komgaBookRepository.findDistinctSeriesNamesGrouped(UNKNOWN)).thenReturn(List.of("S1", "S2", "S3", "S4", "S5"));
 
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.searchSeries(null, null, 1, 2, false);
 
