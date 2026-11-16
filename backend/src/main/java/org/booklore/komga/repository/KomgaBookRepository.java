@@ -10,12 +10,18 @@ import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Read-only queries of the Komga API on the core book entities. Kept out of the core
  * {@code BookRepository} so the Komga module stays self-contained.
  */
 public interface KomgaBookRepository extends Repository<BookEntity, Long>, JpaSpecificationExecutor<BookEntity> {
+
+    /** Non-deleted book with its metadata and files (same query as the core {@code BookRepository}). */
+    @EntityGraph(attributePaths = { "metadata", "metadata.comicMetadata", "shelves", "libraryPath", "library", "bookFiles" })
+    @Query("SELECT b FROM BookEntity b WHERE b.id = :id AND (b.deleted IS NULL OR b.deleted = false)")
+    Optional<BookEntity> findByIdWithBookFiles(@Param("id") Long id);
 
     /**
      * Get distinct series names for a library when groupUnknown=true.

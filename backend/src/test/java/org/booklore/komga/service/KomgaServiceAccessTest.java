@@ -1,8 +1,14 @@
 package org.booklore.komga.service;
 
-import org.booklore.config.security.service.AuthenticationService;
 import org.booklore.exception.APIException;
 import org.booklore.komga.mapper.KomgaMapper;
+import org.booklore.komga.access.KomgaAccessResolver;
+import org.booklore.komga.core.KomgaAccessGateway;
+import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaSettingsGateway;
+import org.booklore.komga.core.KomgaShelfGateway;
+import org.booklore.komga.core.KomgaUserGateway;
+import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
 import org.booklore.komga.dto.KomgaBookDto;
@@ -10,21 +16,14 @@ import org.booklore.komga.dto.KomgaLibraryDto;
 import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
 import org.booklore.komga.dto.KomgaSeriesSearchRequestDto;
-import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.UserContentRestrictionEntity;
-import org.booklore.repository.BookRepository;
 import org.booklore.komga.repository.KomgaBookRepository;
-import org.booklore.repository.LibraryRepository;
-import org.booklore.repository.UserContentRestrictionRepository;
-import org.booklore.service.appsettings.AppSettingService;
-import org.booklore.service.restriction.ContentRestrictionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
@@ -55,30 +54,29 @@ class KomgaServiceAccessTest {
     private static final String UNKNOWN = "Unknown Series";
 
     @Mock
-    private BookRepository bookRepository;
-
-    @Mock
     private KomgaBookRepository komgaBookRepository;
 
     @Mock
-    private LibraryRepository libraryRepository;
+    private KomgaLibraryRepository komgaLibraryRepository;
 
     @Mock
     private KomgaMapper komgaMapper;
 
     @Mock
-    private AppSettingService appSettingService;
+    private KomgaSettingsGateway settings;
 
     @Mock
-    private ContentRestrictionService contentRestrictionService;
+    private KomgaAccessGateway accessGateway;
 
     @Mock
-    private UserContentRestrictionRepository restrictionRepository;
+    private KomgaContentGateway contentGateway;
 
     @Mock
-    private AuthenticationService authenticationService;
+    private KomgaShelfGateway shelfGateway;
 
-    @InjectMocks
+    @Mock
+    private KomgaUserGateway userGateway;
+
     private KomgaService komgaService;
 
     /** Books by id; book ids 1xx are in library 1, 2xx in library 2. */
@@ -86,10 +84,11 @@ class KomgaServiceAccessTest {
 
     @BeforeEach
     void setUp() {
-        AppSettings appSettings = new AppSettings();
-        appSettings.setKomgaGroupUnknown(true);
-        lenient().when(appSettingService.getAppSettings()).thenReturn(appSettings);
-        lenient().when(komgaMapper.getUnknownSeriesName()).thenReturn(UNKNOWN);
+        komgaService = new KomgaService(komgaBookRepository, komgaLibraryRepository, komgaMapper,
+                new KomgaAccessResolver(accessGateway, komgaBookRepository), settings,
+                contentGateway, shelfGateway, userGateway);
+        lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
+        lenient().when(settings.groupUnknown()).thenReturn(true);
         lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any()))
                 .thenAnswer(inv -> KomgaSeriesDto.builder()
                         .name(inv.getArgument(0))
@@ -101,7 +100,7 @@ class KomgaServiceAccessTest {
         lenient().when(komgaMapper.toKomgaLibraryDto(any()))
                 .thenAnswer(inv -> KomgaLibraryDto.builder().id(((LibraryEntity) inv.getArgument(0)).getId().toString()).build());
         // Users without restrictions see every book of their libraries
-        lenient().when(contentRestrictionService.applyRestrictions(anyList(), anyLong()))
+        lenient().when(accessGateway.applyRestrictions(anyList(), anyLong()))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -110,7 +109,7 @@ class KomgaServiceAccessTest {
     @Test
     void librariesAreLimitedToAssignedOnes() {
         loginAsUser(1L);
-        when(libraryRepository.findAll()).thenReturn(List.of(library(1L), library(2L)));
+        when(komgaLibraryRepository.findAll()).thenReturn(List.of(library(1L), library(2L)));
 
         assertThat(komgaService.getAllLibraries()).extracting(KomgaLibraryDto::getId).containsExactly("1");
     }
@@ -118,7 +117,7 @@ class KomgaServiceAccessTest {
     @Test
     void adminSeesEveryLibrary() {
         loginAsAdmin();
-        when(libraryRepository.findAll()).thenReturn(List.of(library(1L), library(2L)));
+        when(komgaLibraryRepository.findAll()).thenReturn(List.of(library(1L), library(2L)));
 
         assertThat(komgaService.getAllLibraries()).extracting(KomgaLibraryDto::getId).containsExactly("1", "2");
     }
@@ -126,7 +125,7 @@ class KomgaServiceAccessTest {
     @Test
     void otherLibraryAndUnknownLibraryAnswer404() {
         loginAsUser(1L);
-        when(libraryRepository.findById(2L)).thenReturn(Optional.of(library(2L)));
+        when(komgaLibraryRepository.findById(2L)).thenReturn(Optional.of(library(2L)));
 
         assertNotFound(() -> komgaService.getLibraryById(2L));
         assertNotFound(() -> komgaService.getLibraryById(3L));
@@ -195,7 +194,7 @@ class KomgaServiceAccessTest {
         // SQL side: only the hidden books are loaded, 102 (one of two Akira books) and 103 (the only Berserk book)
         when(komgaBookRepository.findAll(any(Specification.class))).thenReturn(List.of(hidden, books.get(103L)));
         // In memory side: book 102 is hidden
-        when(contentRestrictionService.applyRestrictions(anyList(), eq(10L)))
+        when(accessGateway.applyRestrictions(anyList(), eq(10L)))
                 .thenAnswer(inv -> ((List<BookEntity>) inv.getArgument(0)).stream().filter(b -> b != hidden).toList());
 
         KomgaPageableDto<KomgaSeriesDto> result = komgaService.getAllSeries(null, 0, 20, false);
@@ -215,7 +214,7 @@ class KomgaServiceAccessTest {
 
         assertThat(komgaService.getAllSeries(null, 0, 20, false).getContent()).hasSize(1);
         verify(komgaBookRepository, never()).findAll(any(Specification.class));
-        verifyNoInteractions(contentRestrictionService);
+        verify(accessGateway, never()).applyRestrictions(any(), any());
     }
 
     // ==================== Series by id ====================
@@ -245,7 +244,7 @@ class KomgaServiceAccessTest {
         loginAsUser(1L);
         restrict();
         seriesIn(1L, "Akira", 101L);
-        when(contentRestrictionService.applyRestrictions(anyList(), eq(10L))).thenReturn(List.of());
+        when(accessGateway.applyRestrictions(anyList(), eq(10L))).thenReturn(List.of());
 
         assertNotFound(() -> komgaService.getSeriesById("1-akira"));
     }
@@ -268,9 +267,9 @@ class KomgaServiceAccessTest {
         restrict();
         BookEntity other = book(201L);
         BookEntity hidden = book(102L);
-        when(bookRepository.findByIdWithBookFiles(201L)).thenReturn(Optional.of(other));
-        when(bookRepository.findByIdWithBookFiles(102L)).thenReturn(Optional.of(hidden));
-        when(contentRestrictionService.applyRestrictions(List.of(hidden), 10L)).thenReturn(List.of());
+        when(komgaBookRepository.findByIdWithBookFiles(201L)).thenReturn(Optional.of(other));
+        when(komgaBookRepository.findByIdWithBookFiles(102L)).thenReturn(Optional.of(hidden));
+        when(accessGateway.applyRestrictions(List.of(hidden), 10L)).thenReturn(List.of());
 
         assertNotFound(() -> komgaService.getBookById(201L));
         assertNotFound(() -> komgaService.getBookPages(201L));
@@ -282,7 +281,7 @@ class KomgaServiceAccessTest {
     @Test
     void visibleBookIsReturned() {
         loginAsUser(1L);
-        when(bookRepository.findByIdWithBookFiles(101L)).thenReturn(Optional.of(book(101L)));
+        when(komgaBookRepository.findByIdWithBookFiles(101L)).thenReturn(Optional.of(book(101L)));
 
         assertThat(komgaService.getBookById(101L).getId()).isEqualTo("101");
     }
@@ -315,13 +314,13 @@ class KomgaServiceAccessTest {
     private void loginAsAdmin() {
         BookLoreUser.UserPermissions permissions = new BookLoreUser.UserPermissions();
         permissions.setAdmin(true);
-        when(authenticationService.getAuthenticatedUser())
+        when(accessGateway.currentUser())
                 .thenReturn(BookLoreUser.builder().id(1L).permissions(permissions).build());
     }
 
     private void loginAsUser(Long... libraryIds) {
         List<Library> libraries = java.util.Arrays.stream(libraryIds).map(id -> Library.builder().id(id).build()).toList();
-        when(authenticationService.getAuthenticatedUser()).thenReturn(BookLoreUser.builder()
+        when(accessGateway.currentUser()).thenReturn(BookLoreUser.builder()
                 .id(10L)
                 .permissions(new BookLoreUser.UserPermissions())
                 .assignedLibraries(libraries)
@@ -329,7 +328,7 @@ class KomgaServiceAccessTest {
     }
 
     private void restrict() {
-        when(restrictionRepository.findByUserId(10L)).thenReturn(List.of(new UserContentRestrictionEntity()));
+        when(accessGateway.restrictions(10L)).thenReturn(List.of(new UserContentRestrictionEntity()));
     }
 
     /** Declares a series of library {@code libraryId} made of the given books. */

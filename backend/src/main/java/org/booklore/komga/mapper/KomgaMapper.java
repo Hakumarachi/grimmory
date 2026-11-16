@@ -7,7 +7,9 @@ import org.booklore.model.dto.MagicShelf;
 import org.booklore.komga.dto.*;
 import org.booklore.model.entity.*;
 import org.booklore.model.enums.BookFileType;
-import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.komga.core.KomgaSettingsGateway;
+import org.booklore.komga.series.SeriesIdCodec;
+import org.booklore.komga.series.SeriesNaming;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -18,17 +20,14 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 @ConditionalOnKomgaEnabled
 @Component
 @RequiredArgsConstructor
 public class KomgaMapper {
 
-    private static final Pattern NON_ALPHANUMERIC_PATTERN = Pattern.compile("[^a-z0-9]+");
-    private final AppSettingService appSettingService;
+    private final KomgaSettingsGateway settings;
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
-    private static final String UNKNOWN_SERIES = "Unknown Series";
 
     public KomgaLibraryDto toKomgaLibraryDto(LibraryEntity library) {
         return KomgaLibraryDto.builder()
@@ -251,25 +250,12 @@ public class KomgaMapper {
     }
 
     public String getBookSeriesName(BookEntity book) {
-        boolean groupUnknown = appSettingService.getAppSettings().isKomgaGroupUnknown();
-        BookMetadataEntity metadata = book.getMetadata();
-        BookFileEntity bookFile = book.getPrimaryBookFile();
-        String bookSeriesName = metadata != null && metadata.getSeriesName() != null 
-            ? metadata.getSeriesName() 
-                : (groupUnknown ? UNKNOWN_SERIES : (metadata.getTitle() != null ? metadata.getTitle() : bookFile.getFileName() ));
-        return bookSeriesName;
-    }
-
-    public String getUnknownSeriesName() {
-        return UNKNOWN_SERIES;
+        return SeriesNaming.nameOf(book, settings.groupUnknown());
     }
 
     private String generateSeriesId(BookEntity book) {
-        String seriesName = getBookSeriesName(book);
-        Long libraryId = book.getLibrary().getId();
-        
-        // Generate a pseudo-ID based on library and series name
-        return libraryId + "-" + NON_ALPHANUMERIC_PATTERN.matcher(seriesName.toLowerCase()).replaceAll("-");
+        // Pseudo-ID based on library and series name
+        return SeriesIdCodec.encode(book.getLibrary().getId(), getBookSeriesName(book));
     }
 
     private String getMediaType(BookFileType bookType) {

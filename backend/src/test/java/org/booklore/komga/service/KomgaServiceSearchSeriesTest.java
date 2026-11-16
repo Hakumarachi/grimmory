@@ -1,24 +1,25 @@
 package org.booklore.komga.service;
 
-import org.booklore.config.security.service.AuthenticationService;
-import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.komga.mapper.KomgaMapper;
+import org.booklore.komga.access.KomgaAccessResolver;
+import org.booklore.komga.core.KomgaAccessGateway;
+import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaSettingsGateway;
+import org.booklore.komga.core.KomgaShelfGateway;
+import org.booklore.komga.core.KomgaUserGateway;
+import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
 import org.booklore.komga.dto.KomgaSeriesSearchRequestDto;
-import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
-import org.booklore.repository.BookRepository;
 import org.booklore.komga.repository.KomgaBookRepository;
 import org.booklore.komga.repository.KomgaBookWithoutSeriesProjection;
 import org.booklore.komga.repository.KomgaSeriesDatesProjection;
-import org.booklore.service.appsettings.AppSettingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.JsonNode;
@@ -38,36 +39,42 @@ class KomgaServiceSearchSeriesTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     @Mock
-    private BookRepository bookRepository;
+    private KomgaBookRepository komgaBookRepository;
 
     @Mock
-    private KomgaBookRepository komgaBookRepository;
+    private KomgaLibraryRepository komgaLibraryRepository;
 
     @Mock
     private KomgaMapper komgaMapper;
 
     @Mock
-    private AppSettingService appSettingService;
+    private KomgaSettingsGateway settings;
 
     @Mock
-    private AuthenticationService authenticationService;
+    private KomgaAccessGateway accessGateway;
 
     @Mock
-    private UserContentRestrictionRepository restrictionRepository;
+    private KomgaContentGateway contentGateway;
 
-    @InjectMocks
+    @Mock
+    private KomgaShelfGateway shelfGateway;
+
+    @Mock
+    private KomgaUserGateway userGateway;
+
     private KomgaService komgaService;
 
     @BeforeEach
     void setUp() {
-        AppSettings appSettings = new AppSettings();
-        appSettings.setKomgaGroupUnknown(true);
-        lenient().when(appSettingService.getAppSettings()).thenReturn(appSettings);
+        komgaService = new KomgaService(komgaBookRepository, komgaLibraryRepository, komgaMapper,
+                new KomgaAccessResolver(accessGateway, komgaBookRepository), settings,
+                contentGateway, shelfGateway, userGateway);
+        lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
+        lenient().when(settings.groupUnknown()).thenReturn(true);
         BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
         adminPermissions.setAdmin(true);
-        lenient().when(authenticationService.getAuthenticatedUser())
+        lenient().when(accessGateway.currentUser())
                 .thenReturn(BookLoreUser.builder().id(1L).permissions(adminPermissions).build());
-        lenient().when(komgaMapper.getUnknownSeriesName()).thenReturn(UNKNOWN);
 
         // Every series has one book in library 1, mapped to a DTO carrying its name
         lenient().when(komgaBookRepository.findBooksBySeriesNameGrouped(anyString(), eq(UNKNOWN)))
@@ -192,9 +199,7 @@ class KomgaServiceSearchSeriesTest {
 
     @Test
     void ungroupedBooksWithoutSeriesUseTitleThenFileName() {
-        AppSettings appSettings = new AppSettings();
-        appSettings.setKomgaGroupUnknown(false);
-        when(appSettingService.getAppSettings()).thenReturn(appSettings);
+        when(settings.groupUnknown()).thenReturn(false);
         when(komgaBookRepository.findDistinctSeriesNamesUngrouped()).thenReturn(List.of("a-file.cbz", "Standalone"));
         when(komgaBookRepository.findBooksBySeriesNameUngrouped(anyString())).thenAnswer(inv -> List.of(book(1L)));
         when(komgaBookRepository.findKomgaSeriesDates()).thenReturn(List.of());

@@ -6,26 +6,17 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.komga.web.json.KomgaJsonConfig;
-import org.booklore.config.security.service.AuthenticationService;
-import org.booklore.config.security.userdetails.OpdsUserDetails;
-import org.booklore.exception.ApiError;
 import org.booklore.exception.ErrorResponse;
-import org.booklore.komga.mapper.KomgaMapper;
-import org.booklore.model.dto.BookLoreUser;
 import org.booklore.komga.dto.KomgaBookDto;
 import org.booklore.komga.dto.KomgaLibraryDto;
 import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
 import org.booklore.komga.dto.KomgaSeriesSearchRequestDto;
-import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookLoreUserEntity;
-import org.booklore.service.book.BookService;
+import org.booklore.komga.dto.KomgaUserDto;
 import org.booklore.komga.service.KomgaService;
-import org.booklore.service.opds.OpdsUserV2Service;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
@@ -34,7 +25,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
@@ -51,10 +41,6 @@ import java.util.List;
 public class KomgaController {
 
     private final KomgaService komgaService;
-    private final BookService bookService;
-    private final AuthenticationService authenticationService;
-    private final OpdsUserV2Service opdsUserV2Service;
-    private final KomgaMapper komgaMapper;
 
     // Inject the dedicated komga mapper bean
     private final @Qualifier(KomgaJsonConfig.KOMGA_CLEAN_OBJECT_MAPPER) ObjectMapper komgaCleanObjectMapper;
@@ -67,18 +53,6 @@ public class KomgaController {
         } catch (Exception e) {
             log.error("Failed to serialize Komga response", e);
             return ResponseEntity.status(500).build();
-        }
-    }
-
-    private void validateBookContentAccess(Long bookId) {
-        BookLoreUser user = authenticationService.getAuthenticatedUser();
-
-        if (user == null) {
-            throw ApiError.FORBIDDEN.createException("Authentication required");
-        }
-
-        if (!komgaService.validateBookContentAccess(user, bookId)) {
-            throw ApiError.BOOK_NOT_FOUND.createException(bookId);
         }
     }
 
@@ -146,13 +120,7 @@ public class KomgaController {
     @GetMapping("/v1/series/{seriesId}/thumbnail")
     public ResponseEntity<Resource> getSeriesThumbnail(
             @Parameter(description = "Series ID") @PathVariable String seriesId) {
-        KomgaPageableDto<KomgaBookDto> books = komgaService.getBooksBySeries(seriesId, 0, 1, false);
-        if (books.getContent().isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        
-        Long firstBookId = Long.parseLong(books.getContent().getFirst().getId());
-        Resource coverImage = bookService.getBookThumbnail(firstBookId);
+        Resource coverImage = komgaService.getSeriesThumbnail(seriesId);
         if (coverImage == null) {
             return ResponseEntity.notFound().build();
         }
@@ -193,7 +161,8 @@ public class KomgaController {
             @Parameter(description = "Book ID") @PathVariable Long bookId,
             @Parameter(description = "Page number") @PathVariable Integer pageNumber,
             @Parameter(description = "Convert image format (e.g., 'png')") @RequestParam(required = false) String convert) {
-        validateBookContentAccess(bookId);
+        // Outside the try: a hidden or unknown book answers the API's 404, not an empty one
+        komgaService.requireBookAccess(bookId);
 
         try {
             boolean convertToPng = "png".equalsIgnoreCase(convert);
@@ -214,18 +183,14 @@ public class KomgaController {
     @GetMapping("/v1/books/{bookId}/file")
     public ResponseEntity<StreamingResponseBody> downloadBook(
             @Parameter(description = "Book ID") @PathVariable Long bookId) {
-        validateBookContentAccess(bookId);
-
-        return bookService.downloadBook(bookId);
+        return komgaService.downloadBook(bookId);
     }
 
     @Operation(summary = "Get book thumbnail")
     @GetMapping("/v1/books/{bookId}/thumbnail")
     public ResponseEntity<Resource> getBookThumbnail(
             @Parameter(description = "Book ID") @PathVariable Long bookId) {
-        validateBookContentAccess(bookId);
-
-        Resource coverImage = bookService.getBookThumbnail(bookId);
+        Resource coverImage = komgaService.getBookThumbnail(bookId);
         if (coverImage == null) {
             return ResponseEntity.notFound().build();
         }
@@ -243,14 +208,11 @@ public class KomgaController {
             return ResponseEntity.status(401).build();
         }
         
-        String username = authentication.getName();
-        var opdsUser = opdsUserV2Service.findByUsername(username);
-        
-        if (opdsUser == null) {
+        KomgaUserDto user = komgaService.getCurrentUser(authentication.getName());
+        if (user == null) {
             return ResponseEntity.notFound().build();
         }
-        
-        return writeJson(komgaMapper.toKomgaUserDto(opdsUser));
+        return writeJson(user);
     }
     
     // ==================== Collections ====================

@@ -5,38 +5,35 @@ import org.booklore.komga.config.ConditionalOnKomgaEnabled;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
-import org.booklore.komga.mapper.KomgaMapper;
-import org.booklore.config.security.service.AuthenticationService;
-import org.booklore.model.dto.BookLoreUser;
-import org.booklore.model.dto.Library;
-import org.booklore.model.dto.MagicShelf;
+import org.booklore.komga.access.KomgaAccess;
+import org.booklore.komga.access.KomgaAccessResolver;
+import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaSettingsGateway;
+import org.booklore.komga.core.KomgaShelfGateway;
+import org.booklore.komga.core.KomgaUserGateway;
 import org.booklore.komga.dto.*;
+import org.booklore.komga.mapper.KomgaMapper;
+import org.booklore.komga.repository.KomgaBookRepository;
+import org.booklore.komga.repository.KomgaBookWithoutSeriesProjection;
+import org.booklore.komga.repository.KomgaLibraryRepository;
+import org.booklore.komga.repository.KomgaSeriesDatesProjection;
+import org.booklore.komga.series.SeriesIdCodec;
+import org.booklore.komga.series.SeriesKey;
+import org.booklore.komga.series.SeriesNaming;
+import org.booklore.model.dto.MagicShelf;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
-import org.booklore.model.entity.UserContentRestrictionEntity;
-import org.booklore.model.enums.BookFileType;
-import org.booklore.repository.BookRepository;
-import org.booklore.repository.LibraryRepository;
-import org.booklore.repository.UserContentRestrictionRepository;
-import org.booklore.komga.repository.KomgaBookRepository;
-import org.booklore.komga.repository.KomgaBookWithoutSeriesProjection;
-import org.booklore.komga.repository.KomgaSeriesDatesProjection;
-import org.booklore.security.policy.ContentRestrictionSpecification;
-import org.booklore.service.MagicShelfService;
-import org.booklore.service.appsettings.AppSettingService;
-import org.booklore.service.browse.BookFilterSpecification;
-import org.booklore.service.reader.CbxReaderService;
-import org.booklore.service.reader.PdfReaderService;
-import org.booklore.service.restriction.ContentRestrictionService;
+import org.booklore.model.entity.OpdsUserV2Entity;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import tools.jackson.databind.JsonNode;
 
 import javax.imageio.ImageIO;
@@ -56,133 +53,28 @@ import java.util.regex.Pattern;
 @Transactional(readOnly = true)
 public class KomgaService {
 
-    private static final Pattern NON_ALPHANUMERIC_PATTERN = Pattern.compile("[^a-z0-9]+");
     private static final Pattern LUCENE_ESCAPE_PATTERN = Pattern.compile("\\\\(.)");
     private static final Pattern DIACRITICS_PATTERN = Pattern.compile("\\p{M}+");
-    private final BookRepository bookRepository;
     private final KomgaBookRepository komgaBookRepository;
-    private final LibraryRepository libraryRepository;
+    private final KomgaLibraryRepository komgaLibraryRepository;
     private final KomgaMapper komgaMapper;
-    private final MagicShelfService magicShelfService;
-    private final CbxReaderService cbxReaderService;
-    private final PdfReaderService pdfReaderService;
-    private final AppSettingService appSettingService;
-    private final ContentRestrictionService contentRestrictionService;
-    private final UserContentRestrictionRepository restrictionRepository;
-    private final AuthenticationService authenticationService;
-
-    /**
-     * What the authenticated user may see through the Komga API: admins see everything,
-     * other users only their assigned libraries, minus the books hidden by their content restrictions.
-     */
-    record KomgaAccess(Long userId, boolean admin, Set<Long> libraryIds,
-                       List<UserContentRestrictionEntity> restrictions) {
-
-        boolean canSeeLibrary(Long libraryId) {
-            return admin || (libraryId != null && libraryIds.contains(libraryId));
-        }
-
-        boolean restricted() {
-            return !admin && !restrictions.isEmpty();
-        }
-    }
-
-    KomgaAccess currentAccess() {
-        BookLoreUser user = authenticationService.getAuthenticatedUser();
-        if (user == null) {
-            throw ApiError.FORBIDDEN.createException("Authentication required");
-        }
-        if (user.getPermissions() != null && user.getPermissions().isAdmin()) {
-            return new KomgaAccess(user.getId(), true, Set.of(), List.of());
-        }
-        Set<Long> libraryIds = new TreeSet<>();
-        if (user.getAssignedLibraries() != null) {
-            user.getAssignedLibraries().stream().map(Library::getId).forEach(libraryIds::add);
-        }
-        return new KomgaAccess(user.getId(), false, libraryIds, restrictionRepository.findByUserId(user.getId()));
-    }
-
-    /** Removes the books hidden from a non-admin user by their content restrictions. */
-    private List<BookEntity> visibleBooks(List<BookEntity> books, KomgaAccess access) {
-        if (!access.restricted() || books.isEmpty()) {
-            return books;
-        }
-        return contentRestrictionService.applyRestrictions(books, access.userId());
-    }
-
-    /** Non-deleted books of the given libraries. */
-    private static Specification<BookEntity> booksInLibraries(Collection<Long> libraryIds) {
-        Specification<BookEntity> inLibraries = (root, query, cb) ->
-                libraryIds.isEmpty() ? cb.disjunction() : root.get("library").get("id").in(libraryIds);
-        return BookFilterSpecification.notDeleted().and(inLibraries);
-    }
-
-    /** Non-deleted books of the given libraries that pass the user's content restrictions. */
-    private Specification<BookEntity> visibleBooksSpec(Collection<Long> libraryIds, KomgaAccess access) {
-        return booksInLibraries(libraryIds).and(ContentRestrictionSpecification.from(access.restrictions()));
-    }
-
-    /**
-     * Non-deleted books of the given libraries hidden by the user's content restrictions: the exact
-     * complement of {@link #visibleBooksSpec}, as every restriction is an {@code EXISTS} subquery.
-     */
-    private Specification<BookEntity> hiddenBooksSpec(Collection<Long> libraryIds, KomgaAccess access) {
-        return booksInLibraries(libraryIds).and(Specification.not(ContentRestrictionSpecification.from(access.restrictions())));
-    }
-
-    /** Loads a book the user may see, or answers 404 (the book's existence is not disclosed). */
-    private BookEntity findVisibleBook(Long bookId) {
-        KomgaAccess access = currentAccess();
-        return bookRepository.findByIdWithBookFiles(bookId)
-                .filter(book -> access.admin()
-                        || (book.getLibrary() != null && access.canSeeLibrary(book.getLibrary().getId())))
-                .filter(book -> !visibleBooks(List.of(book), access).isEmpty())
-                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
-    }
-
-    public boolean validateBookContentAccess(BookLoreUser user, Long bookId) {
-        if (user == null) {
-            return false;
-        }
-
-        if (user.getPermissions() != null && user.getPermissions().isAdmin()) {
-            return true;
-        }
-
-        BookEntity book = bookRepository.findById(bookId)
-                .orElse(null);
-
-        if (book == null) {
-            return false;
-        }
-
-        boolean hasLibraryAccess = user.getAssignedLibraries() != null && user.getAssignedLibraries().stream()
-                .anyMatch(library -> library.getId().equals(book.getLibrary().getId()));
-
-        if (!hasLibraryAccess) {
-            return false;
-        }
-
-        List<BookEntity> filtered = contentRestrictionService.applyRestrictions(List.of(book), user.getId());
-        if (filtered.isEmpty()) {
-            return false;
-        }
-
-        return true;
-    }
-
+    private final KomgaAccessResolver accessResolver;
+    private final KomgaSettingsGateway settings;
+    private final KomgaContentGateway contentGateway;
+    private final KomgaShelfGateway shelfGateway;
+    private final KomgaUserGateway userGateway;
 
     public List<KomgaLibraryDto> getAllLibraries() {
-        KomgaAccess access = currentAccess();
-        return libraryRepository.findAll().stream()
+        KomgaAccess access = accessResolver.current();
+        return komgaLibraryRepository.findAll().stream()
                 .filter(library -> access.canSeeLibrary(library.getId()))
                 .map(komgaMapper::toKomgaLibraryDto)
                 .toList();
     }
 
     public KomgaLibraryDto getLibraryById(Long libraryId) {
-        KomgaAccess access = currentAccess();
-        LibraryEntity library = libraryRepository.findById(libraryId)
+        KomgaAccess access = accessResolver.current();
+        LibraryEntity library = komgaLibraryRepository.findById(libraryId)
                 .filter(found -> access.canSeeLibrary(found.getId()))
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
         return komgaMapper.toKomgaLibraryDto(library);
@@ -191,11 +83,11 @@ public class KomgaService {
     public KomgaPageableDto<KomgaSeriesDto> getAllSeries(Long libraryId, int page, int size, boolean unpaged) {
         log.debug("Getting all series for libraryId: {}, page: {}, size: {}", libraryId, page, size);
 
-        KomgaAccess access = currentAccess();
-        boolean groupUnknown = appSettingService.getAppSettings().isKomgaGroupUnknown();
+        KomgaAccess access = accessResolver.current();
+        boolean groupUnknown = settings.groupUnknown();
 
         // Get distinct series names directly from database (MUCH faster than loading all books)
-        List<SeriesRef> series = findVisibleSeries(libraryId != null ? Set.of(libraryId) : Set.of(), access, groupUnknown);
+        List<SeriesKey> series = findVisibleSeries(libraryId != null ? Set.of(libraryId) : Set.of(), access, groupUnknown);
 
         log.debug("Found {} distinct series names from database (optimized)", series.size());
 
@@ -213,13 +105,13 @@ public class KomgaService {
      */
     public KomgaPageableDto<KomgaSeriesDto> searchSeries(KomgaSeriesSearchRequestDto request, String sort,
                                                          int page, int size, boolean unpaged) {
-        KomgaAccess access = currentAccess();
-        boolean groupUnknown = appSettingService.getAppSettings().isKomgaGroupUnknown();
+        KomgaAccess access = accessResolver.current();
+        boolean groupUnknown = settings.groupUnknown();
 
         Set<Long> libraryIds = request != null ? collectLibraryIds(request.getCondition()) : Set.of();
         List<String> terms = searchTerms(request != null ? request.getFullTextSearch() : null);
 
-        List<SeriesRef> series = findVisibleSeries(libraryIds, access, groupUnknown);
+        List<SeriesKey> series = findVisibleSeries(libraryIds, access, groupUnknown);
 
         if (!terms.isEmpty()) {
             series.removeIf(ref -> {
@@ -235,9 +127,6 @@ public class KomgaService {
         return buildSeriesPage(series, page, size, unpaged, groupUnknown, access);
     }
 
-    /** A Komga series: its name, and the library it is scoped to ({@code null} = all libraries). */
-    private record SeriesRef(String name, Long libraryId) {}
-
     /**
      * Series the user may see, sorted by name. {@code requestedLibraryIds} empty means every library
      * the user can access; requested libraries the user cannot access are dropped.
@@ -246,10 +135,10 @@ public class KomgaService {
      * Other users get one entry per accessible library. When the user has content restrictions,
      * series whose books are all hidden are removed, so they don't leak through names or counts.
      */
-    private List<SeriesRef> findVisibleSeries(Set<Long> requestedLibraryIds, KomgaAccess access, boolean groupUnknown) {
-        List<SeriesRef> series = new ArrayList<>();
+    private List<SeriesKey> findVisibleSeries(Set<Long> requestedLibraryIds, KomgaAccess access, boolean groupUnknown) {
+        List<SeriesKey> series = new ArrayList<>();
         if (access.admin() && requestedLibraryIds.isEmpty()) {
-            findSeriesNames(null, groupUnknown).forEach(name -> series.add(new SeriesRef(name, null)));
+            findSeriesNames(null, groupUnknown).forEach(name -> series.add(new SeriesKey(name, null)));
             return series;
         }
 
@@ -257,10 +146,10 @@ public class KomgaService {
                 .filter(access::canSeeLibrary)
                 .toList();
         for (Long libraryId : libraryIds) {
-            findSeriesNames(libraryId, groupUnknown).forEach(name -> series.add(new SeriesRef(name, libraryId)));
+            findSeriesNames(libraryId, groupUnknown).forEach(name -> series.add(new SeriesKey(name, libraryId)));
         }
         if (libraryIds.size() > 1) {
-            series.sort(Comparator.comparing(SeriesRef::name, String.CASE_INSENSITIVE_ORDER));
+            series.sort(Comparator.comparing(SeriesKey::name, String.CASE_INSENSITIVE_ORDER));
         }
 
         if (access.restricted() && !series.isEmpty()) {
@@ -273,12 +162,12 @@ public class KomgaService {
      * Series whose books are all hidden by the user's content restrictions. Only the hidden books
      * are loaded (usually a handful), then each series holding one is counted.
      */
-    private Set<SeriesRef> fullyHiddenSeries(Collection<Long> libraryIds, KomgaAccess access, boolean groupUnknown) {
-        Map<SeriesRef, Integer> hiddenCounts = new HashMap<>();
-        for (BookEntity book : komgaBookRepository.findAll(hiddenBooksSpec(libraryIds, access))) {
-            hiddenCounts.merge(new SeriesRef(seriesNameOf(book, groupUnknown), book.getLibrary().getId()), 1, Integer::sum);
+    private Set<SeriesKey> fullyHiddenSeries(Collection<Long> libraryIds, KomgaAccess access, boolean groupUnknown) {
+        Map<SeriesKey, Integer> hiddenCounts = new HashMap<>();
+        for (BookEntity book : komgaBookRepository.findAll(accessResolver.hiddenBooksSpec(libraryIds, access))) {
+            hiddenCounts.merge(new SeriesKey(SeriesNaming.nameOf(book, groupUnknown), book.getLibrary().getId()), 1, Integer::sum);
         }
-        Set<SeriesRef> fullyHidden = new HashSet<>();
+        Set<SeriesKey> fullyHidden = new HashSet<>();
         hiddenCounts.forEach((ref, hidden) -> {
             if (hidden >= findSeriesBooks(ref, groupUnknown).size()) {
                 fullyHidden.add(ref);
@@ -287,26 +176,12 @@ public class KomgaService {
         return fullyHidden;
     }
 
-    /** Series name of a book, derived like the series name queries do. */
-    private String seriesNameOf(BookEntity book, boolean groupUnknown) {
-        BookMetadataEntity metadata = book.getMetadata();
-        if (metadata != null && metadata.getSeriesName() != null) {
-            return metadata.getSeriesName();
-        }
-        if (groupUnknown) {
-            return komgaMapper.getUnknownSeriesName();
-        }
-        return metadata != null && metadata.getTitle() != null
-                ? metadata.getTitle()
-                : book.getPrimaryBookFile().getFileName();
-    }
-
     private List<String> findSeriesNames(Long libraryId, boolean groupUnknown) {
         if (groupUnknown) {
             // Books without series are grouped as "Unknown Series"
             return libraryId != null
-                    ? komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, komgaMapper.getUnknownSeriesName())
-                    : komgaBookRepository.findDistinctSeriesNamesGrouped(komgaMapper.getUnknownSeriesName());
+                    ? komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(libraryId, SeriesNaming.UNKNOWN_SERIES)
+                    : komgaBookRepository.findDistinctSeriesNamesGrouped(SeriesNaming.UNKNOWN_SERIES);
         }
         // Each book without series gets its own entry
         return libraryId != null
@@ -314,22 +189,22 @@ public class KomgaService {
                 : komgaBookRepository.findDistinctSeriesNamesUngrouped();
     }
 
-    private List<BookEntity> findSeriesBooks(SeriesRef series, boolean groupUnknown) {
+    private List<BookEntity> findSeriesBooks(SeriesKey series, boolean groupUnknown) {
         if (series.libraryId() != null) {
             return groupUnknown
-                    ? komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(series.name(), series.libraryId(), komgaMapper.getUnknownSeriesName())
+                    ? komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(series.name(), series.libraryId(), SeriesNaming.UNKNOWN_SERIES)
                     : komgaBookRepository.findBooksBySeriesNameUngroupedByLibraryId(series.name(), series.libraryId());
         }
         // For all libraries without library filter
         return groupUnknown
-                ? komgaBookRepository.findBooksBySeriesNameGrouped(series.name(), komgaMapper.getUnknownSeriesName())
+                ? komgaBookRepository.findBooksBySeriesNameGrouped(series.name(), SeriesNaming.UNKNOWN_SERIES)
                 : komgaBookRepository.findBooksBySeriesNameUngrouped(series.name());
     }
 
-    private KomgaPageableDto<KomgaSeriesDto> buildSeriesPage(List<SeriesRef> series, int page, int size,
+    private KomgaPageableDto<KomgaSeriesDto> buildSeriesPage(List<SeriesKey> series, int page, int size,
                                                              boolean unpaged, boolean groupUnknown, KomgaAccess access) {
         int totalElements = series.size();
-        List<SeriesRef> pageSeries;
+        List<SeriesKey> pageSeries;
         int actualPage;
         int actualSize;
         int totalPages;
@@ -351,9 +226,9 @@ public class KomgaService {
 
         // Now load books only for the series on this page (optimized - only loads what's needed)
         List<KomgaSeriesDto> content = new ArrayList<>();
-        for (SeriesRef ref : pageSeries) {
+        for (SeriesKey ref : pageSeries) {
             try {
-                List<BookEntity> seriesBooks = visibleBooks(findSeriesBooks(ref, groupUnknown), access);
+                List<BookEntity> seriesBooks = accessResolver.visibleBooks(findSeriesBooks(ref, groupUnknown), access);
                 if (!seriesBooks.isEmpty()) {
                     Long libId = seriesBooks.getFirst().getLibrary().getId();
                     KomgaSeriesDto seriesDto = komgaMapper.toKomgaSeriesDto(ref.name(), libId, seriesBooks);
@@ -430,7 +305,7 @@ public class KomgaService {
         return DIACRITICS_PATTERN.matcher(decomposed).replaceAll("").toLowerCase(Locale.ROOT);
     }
 
-    private void sortSeries(List<SeriesRef> series, String sort, boolean groupUnknown) {
+    private void sortSeries(List<SeriesKey> series, String sort, boolean groupUnknown) {
         String field = null;
         boolean descending = false;
         if (sort != null && !sort.isBlank()) {
@@ -446,9 +321,9 @@ public class KomgaService {
         switch (field) {
             case "random" -> Collections.shuffle(series);
             case "createdDate", "lastModifiedDate" -> {
-                Map<SeriesRef, SeriesDates> dates = seriesDates(groupUnknown);
+                Map<SeriesKey, SeriesDates> dates = seriesDates(groupUnknown);
                 boolean created = "createdDate".equals(field);
-                Comparator<SeriesRef> byDate = Comparator.comparing(
+                Comparator<SeriesKey> byDate = Comparator.comparing(
                         ref -> {
                             SeriesDates d = dates.get(ref);
                             return d == null ? null : created ? d.created() : d.lastModified();
@@ -480,13 +355,13 @@ public class KomgaService {
      * (libraryId {@code null}). Series with a name are aggregated in SQL; only books without
      * series name are handled one by one, to derive their name like the series name queries do.
      */
-    private Map<SeriesRef, SeriesDates> seriesDates(boolean groupUnknown) {
-        Map<SeriesRef, SeriesDates> dates = new HashMap<>();
+    private Map<SeriesKey, SeriesDates> seriesDates(boolean groupUnknown) {
+        Map<SeriesKey, SeriesDates> dates = new HashMap<>();
         for (KomgaSeriesDatesProjection row : komgaBookRepository.findKomgaSeriesDates()) {
             addSeriesDates(dates, row.getSeriesName(), row.getLibraryId(), row.getCreatedDate(), row.getLastModifiedDate());
         }
 
-        String unknownSeriesName = groupUnknown ? komgaMapper.getUnknownSeriesName() : null;
+        String unknownSeriesName = groupUnknown ? SeriesNaming.UNKNOWN_SERIES : null;
         for (KomgaBookWithoutSeriesProjection row : komgaBookRepository.findKomgaBooksWithoutSeries()) {
             String name = groupUnknown
                     ? unknownSeriesName
@@ -496,14 +371,14 @@ public class KomgaService {
         return dates;
     }
 
-    private static void addSeriesDates(Map<SeriesRef, SeriesDates> dates, String name, Long libraryId,
+    private static void addSeriesDates(Map<SeriesKey, SeriesDates> dates, String name, Long libraryId,
                                        Instant created, Instant lastModified) {
         if (name == null || created == null || lastModified == null) {
             return;
         }
         SeriesDates value = new SeriesDates(created, lastModified);
-        dates.merge(new SeriesRef(name, libraryId), value, SeriesDates::merge);
-        dates.merge(new SeriesRef(name, null), value, SeriesDates::merge);
+        dates.merge(new SeriesKey(name, libraryId), value, SeriesDates::merge);
+        dates.merge(new SeriesKey(name, null), value, SeriesDates::merge);
     }
 
     /** A series resolved from its Komga ID, with only the books the user may see. */
@@ -514,26 +389,16 @@ public class KomgaService {
      * is not accessible to the user, no series matches, or all its books are hidden from the user.
      */
     private Optional<ResolvedSeries> resolveSeries(String seriesId, KomgaAccess access) {
-        String[] parts = seriesId.split("-", 2);
-        if (parts.length < 2) {
+        Optional<SeriesIdCodec.ParsedSeriesId> parsed = SeriesIdCodec.decode(seriesId);
+        if (parsed.isEmpty() || !access.canSeeLibrary(parsed.get().libraryId())) {
             return Optional.empty();
         }
-        Long libraryId;
-        try {
-            libraryId = Long.parseLong(parts[0]);
-        } catch (NumberFormatException e) {
-            return Optional.empty();
-        }
-        if (!access.canSeeLibrary(libraryId)) {
-            return Optional.empty();
-        }
-
-        String seriesSlug = parts[1];
-        boolean groupUnknown = appSettingService.getAppSettings().isKomgaGroupUnknown();
+        Long libraryId = parsed.get().libraryId();
+        boolean groupUnknown = settings.groupUnknown();
 
         // Find the series name that matches this slug
         Optional<String> matchedSeriesName = findSeriesNames(libraryId, groupUnknown).stream()
-                .filter(name -> NON_ALPHANUMERIC_PATTERN.matcher(name.toLowerCase()).replaceAll("-").equals(seriesSlug))
+                .filter(parsed.get()::matches)
                 .findFirst();
         if (matchedSeriesName.isEmpty()) {
             return Optional.empty();
@@ -541,19 +406,19 @@ public class KomgaService {
 
         // Load only the books for this specific series (already sorted by seriesNumber via query ORDER BY)
         String name = matchedSeriesName.get();
-        List<BookEntity> books = visibleBooks(findSeriesBooks(new SeriesRef(name, libraryId), groupUnknown), access);
+        List<BookEntity> books = accessResolver.visibleBooks(findSeriesBooks(new SeriesKey(name, libraryId), groupUnknown), access);
         return books.isEmpty() ? Optional.empty() : Optional.of(new ResolvedSeries(name, libraryId, books));
     }
 
     public KomgaSeriesDto getSeriesById(String seriesId) {
-        ResolvedSeries series = resolveSeries(seriesId, currentAccess())
+        ResolvedSeries series = resolveSeries(seriesId, accessResolver.current())
                 .orElseThrow(() -> ApiError.GENERIC_NOT_FOUND.createException("Series not found: " + seriesId));
         return komgaMapper.toKomgaSeriesDto(series.name(), series.libraryId(), series.books());
     }
 
     public KomgaPageableDto<KomgaBookDto> getBooksBySeries(String seriesId, int page, int size, boolean unpaged) {
         // Unknown or hidden series: empty page, like a Komga search with a seriesId condition
-        List<BookEntity> seriesBooks = resolveSeries(seriesId, currentAccess())
+        List<BookEntity> seriesBooks = resolveSeries(seriesId, accessResolver.current())
                 .map(ResolvedSeries::books)
                 .orElse(List.of());
         
@@ -599,7 +464,7 @@ public class KomgaService {
     }
 
     public KomgaPageableDto<KomgaBookDto> getAllBooks(Long libraryId, int page, int size) {
-        KomgaAccess access = currentAccess();
+        KomgaAccess access = accessResolver.current();
         Pageable pageable = PageRequest.of(page, size);
         Page<BookEntity> bookPage;
 
@@ -607,7 +472,7 @@ public class KomgaService {
             // Only accessible libraries, minus books hidden by content restrictions (filtered in SQL so counts stay right)
             Set<Long> libraryIds = libraryId == null ? access.libraryIds()
                     : access.canSeeLibrary(libraryId) ? Set.of(libraryId) : Set.of();
-            bookPage = komgaBookRepository.findAll(visibleBooksSpec(libraryIds, access), pageable);
+            bookPage = komgaBookRepository.findAll(accessResolver.visibleBooksSpec(libraryIds, access), pageable);
         } else if (libraryId != null) {
             bookPage = komgaBookRepository.findAllWithMetadataByLibraryIdPaged(libraryId, pageable);
         } else {
@@ -632,12 +497,12 @@ public class KomgaService {
     }
 
     public KomgaBookDto getBookById(Long bookId) {
-        BookEntity book = findVisibleBook(bookId);
+        BookEntity book = accessResolver.requireVisibleBook(bookId);
         return komgaMapper.toKomgaBookDto(book);
     }
 
     public List<KomgaPageDto> getBookPages(Long bookId) {
-        BookEntity book = findVisibleBook(bookId);
+        BookEntity book = accessResolver.requireVisibleBook(bookId);
         
         BookMetadataEntity metadata = book.getMetadata();
         Integer pageCount = metadata != null && metadata.getPageCount() != null ? metadata.getPageCount() : 0;
@@ -656,21 +521,10 @@ public class KomgaService {
         return pages;
     }
 
-    private Map<String, List<BookEntity>> groupBooksBySeries(List<BookEntity> books) {
-        Map<String, List<BookEntity>> seriesMap = new HashMap<>();
-        
-        for (BookEntity book : books) {
-            String seriesName = komgaMapper.getBookSeriesName(book);
-            seriesMap.computeIfAbsent(seriesName, k -> new ArrayList<>()).add(book);
-        }
-        
-        return seriesMap;
-    }
-    
     public KomgaPageableDto<KomgaCollectionDto> getCollections(int page, int size, boolean unpaged) {
         log.debug("Getting collections, page: {}, size: {}, unpaged: {}", page, size, unpaged);
         
-        List<MagicShelf> magicShelves = magicShelfService.getUserShelves();
+        List<MagicShelf> magicShelves = shelfGateway.magicShelves();
         log.debug("Found {} magic shelves", magicShelves.size());
         
         // Convert to collection DTOs - for now, series count is 0 since we don't have 
@@ -718,25 +572,46 @@ public class KomgaService {
                 .build();
     }
     
+    /** 404 unless the current user may see the book. */
+    public void requireBookAccess(Long bookId) {
+        accessResolver.requireVisibleBook(bookId);
+    }
+
+    /** Thumbnail of a book the user may see; {@code null} when the book has none. */
+    public Resource getBookThumbnail(Long bookId) {
+        accessResolver.requireVisibleBook(bookId);
+        return contentGateway.thumbnail(bookId);
+    }
+
+    /** Thumbnail of a series: the one of its first visible book; {@code null} when there is none. */
+    public Resource getSeriesThumbnail(String seriesId) {
+        KomgaPageableDto<KomgaBookDto> books = getBooksBySeries(seriesId, 0, 1, false);
+        if (books.getContent().isEmpty()) {
+            return null;
+        }
+        return contentGateway.thumbnail(Long.parseLong(books.getContent().getFirst().getId()));
+    }
+
+    /** File of a book the user may see. */
+    public ResponseEntity<StreamingResponseBody> downloadBook(Long bookId) {
+        accessResolver.requireVisibleBook(bookId);
+        return contentGateway.download(bookId);
+    }
+
+    /** Komga user of an OPDS account, or {@code null} when the account does not exist. */
+    public KomgaUserDto getCurrentUser(String username) {
+        OpdsUserV2Entity opdsUser = userGateway.opdsUser(username);
+        return opdsUser != null ? komgaMapper.toKomgaUserDto(opdsUser) : null;
+    }
+
     public Resource getBookPageImage(Long bookId, Integer pageNumber, boolean convertToPng) throws IOException {
         log.debug("Getting page {} from book {} (convert to PNG: {})", pageNumber, bookId, convertToPng);
         
-        BookEntity book = findVisibleBook(bookId);
+        BookEntity book = accessResolver.requireVisibleBook(bookId);
 
-        boolean isPDF = book.getPrimaryBookFile().getBookType() == BookFileType.PDF;
-     
-        // Stream the page to a ByteArrayOutputStream
-        // streamPageImage will throw if page does not exist
+        // Stream the page to a ByteArrayOutputStream; throws if the page does not exist
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-
-        // Make sure pages are cached
-        if (isPDF) {
-            pdfReaderService.getAvailablePages(bookId);
-            pdfReaderService.streamPageImage(bookId, pageNumber, outputStream);
-        } else {
-            cbxReaderService.getAvailablePages(bookId);
-            cbxReaderService.streamPageImage(bookId, pageNumber, outputStream);
-        }
+        contentGateway.streamPage(bookId, book.getPrimaryBookFile().getBookType(), pageNumber, outputStream);
         
         byte[] imageData = outputStream.toByteArray();
         

@@ -3,13 +3,12 @@ package org.booklore.komga.mapper;
 import org.booklore.komga.web.json.KomgaCleanContext;
 import org.booklore.komga.dto.KomgaBookDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
-import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.enums.BookFileType;
-import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.komga.core.KomgaSettingsGateway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,7 +29,7 @@ import static org.mockito.Mockito.when;
 class KomgaMapperTest {
 
     @Mock
-    private AppSettingService appSettingService;
+    private KomgaSettingsGateway settings;
 
     @InjectMocks
     private KomgaMapper mapper;
@@ -44,9 +43,7 @@ class KomgaMapperTest {
     @BeforeEach
     void setUp() {
         // Mock app settings for all tests
-        AppSettings appSettings = new AppSettings();
-        appSettings.setKomgaGroupUnknown(true);
-        when(appSettingService.getAppSettings()).thenReturn(appSettings);
+        when(settings.groupUnknown()).thenReturn(true);
     }
 
     @Test

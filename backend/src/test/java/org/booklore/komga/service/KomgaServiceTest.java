@@ -1,31 +1,28 @@
 package org.booklore.komga.service;
 
-import org.booklore.config.security.service.AuthenticationService;
-import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.komga.mapper.KomgaMapper;
+import org.booklore.komga.access.KomgaAccessResolver;
+import org.booklore.komga.core.KomgaAccessGateway;
+import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaSettingsGateway;
+import org.booklore.komga.core.KomgaShelfGateway;
+import org.booklore.komga.core.KomgaUserGateway;
+import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
 import org.booklore.komga.dto.KomgaBookDto;
 import org.booklore.komga.dto.KomgaPageDto;
 import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
-import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.enums.BookFileType;
-import org.booklore.repository.BookRepository;
 import org.booklore.komga.repository.KomgaBookRepository;
-import org.booklore.repository.LibraryRepository;
-import org.booklore.service.MagicShelfService;
-import org.booklore.service.appsettings.AppSettingService;
-import org.booklore.service.reader.CbxReaderService;
-import org.booklore.service.restriction.ContentRestrictionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -43,36 +40,29 @@ import static org.mockito.Mockito.*;
 class KomgaServiceTest {
 
     @Mock
-    private BookRepository bookRepository;
-
-    @Mock
     private KomgaBookRepository komgaBookRepository;
 
     @Mock
-    private LibraryRepository libraryRepository;
+    private KomgaLibraryRepository komgaLibraryRepository;
 
     @Mock
     private KomgaMapper komgaMapper;
-    
-    @Mock
-    private MagicShelfService magicShelfService;
-    
-    @Mock
-    private CbxReaderService cbxReaderService;
-    
-    @Mock
-    private AppSettingService appSettingService;
 
     @Mock
-    private ContentRestrictionService contentRestrictionService;
+    private KomgaSettingsGateway settings;
 
     @Mock
-    private AuthenticationService authenticationService;
+    private KomgaAccessGateway accessGateway;
 
     @Mock
-    private UserContentRestrictionRepository restrictionRepository;
+    private KomgaContentGateway contentGateway;
 
-    @InjectMocks
+    @Mock
+    private KomgaShelfGateway shelfGateway;
+
+    @Mock
+    private KomgaUserGateway userGateway;
+
     private KomgaService komgaService;
 
     private LibraryEntity library;
@@ -80,16 +70,18 @@ class KomgaServiceTest {
 
     @BeforeEach
     void setUp() {
+        komgaService = new KomgaService(komgaBookRepository, komgaLibraryRepository, komgaMapper,
+                new KomgaAccessResolver(accessGateway, komgaBookRepository), settings,
+                contentGateway, shelfGateway, userGateway);
+        lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         library = new LibraryEntity();
         library.setId(1L);
         
         // Mock app settings (lenient because not all tests use this)
-        AppSettings appSettings = new AppSettings();
-        appSettings.setKomgaGroupUnknown(true);
-        lenient().when(appSettingService.getAppSettings()).thenReturn(appSettings);
+        lenient().when(settings.groupUnknown()).thenReturn(true);
         BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
         adminPermissions.setAdmin(true);
-        lenient().when(authenticationService.getAuthenticatedUser())
+        lenient().when(accessGateway.currentUser())
                 .thenReturn(BookLoreUser.builder().id(1L).permissions(adminPermissions).build());
 
         // Create multiple books for testing pagination
@@ -125,7 +117,6 @@ class KomgaServiceTest {
     @Test
     void shouldReturnAllBooksWhenUnpagedIsTrue() {
         // Given
-        when(komgaMapper.getUnknownSeriesName()).thenReturn("Unknown Series");
         when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, "Unknown Series"))
                 .thenReturn(List.of("Test Series"));
         when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Test Series", 1L, "Unknown Series"))
@@ -155,7 +146,6 @@ class KomgaServiceTest {
     @Test
     void shouldReturnPagedBooksWhenUnpagedIsFalse() {
         // Given
-        when(komgaMapper.getUnknownSeriesName()).thenReturn("Unknown Series");
         when(komgaBookRepository.findDistinctSeriesNamesGroupedByLibraryId(1L, "Unknown Series"))
                 .thenReturn(List.of("Test Series"));
         when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Test Series", 1L, "Unknown Series"))
@@ -195,7 +185,7 @@ class KomgaServiceTest {
         book.setId(100L);
         book.setMetadata(metadata);
 
-        when(bookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
+        when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
 
         // When: Get book pages
         List<KomgaPageDto> pages = komgaService.getBookPages(100L);
@@ -217,7 +207,7 @@ class KomgaServiceTest {
         book.setId(100L);
         book.setMetadata(metadata);
 
-        when(bookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
+        when(komgaBookRepository.findByIdWithBookFiles(100L)).thenReturn(Optional.of(book));
 
         // When: Get book pages
         List<KomgaPageDto> pages = komgaService.getBookPages(100L);
@@ -245,7 +235,6 @@ class KomgaServiceTest {
         when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Series B", 1L, "Unknown Series"))
                 .thenReturn(seriesBBooks);
         
-        when(komgaMapper.getUnknownSeriesName()).thenReturn("Unknown Series");
         when(komgaMapper.toKomgaSeriesDto(eq("Series A"), anyLong(), any()))
                 .thenReturn(KomgaSeriesDto.builder().id("1-series-a").name("Series A").booksCount(2).build());
         when(komgaMapper.toKomgaSeriesDto(eq("Series B"), anyLong(), any()))
@@ -264,128 +253,5 @@ class KomgaServiceTest {
         assertThat(result.getLast()).isFalse();
         
         // Verify that only books for Series A and B were loaded (optimization check)
-        verify(bookRepository, never()).findAllWithMetadataByLibraryId(anyLong());
-        verify(bookRepository, never()).findAllWithMetadata();
-    }
-
-    @Test
-    void validateBookContentAccess_acceptsBookCorrectWithAccess() {
-        BookEntity bookEntity = getBookEntity();
-        BookLoreUser user = getBookloreUser(false, List.of(library));
-
-        when(bookRepository.findById(1L)).thenReturn(Optional.of(bookEntity));
-        when(
-                contentRestrictionService.applyRestrictions(List.of(bookEntity), user.getId())
-        ).thenReturn(List.of(bookEntity));
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isTrue();
-    }
-
-    @Test
-    void validateBookContentAccess_ignoresNoPermissionUser() {
-        BookEntity bookEntity = getBookEntity();
-        BookLoreUser user = BookLoreUser.builder()
-                .id(1L)
-                .assignedLibraries(List.of(Library.builder().id(1L).build()))
-                .build();
-
-        when(bookRepository.findById(1L)).thenReturn(Optional.of(bookEntity));
-        when(
-                contentRestrictionService.applyRestrictions(List.of(bookEntity), user.getId())
-        ).thenReturn(List.of(bookEntity));
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isTrue();
-    }
-
-    @Test
-    void validateBookContentAccess_rejectsNullLibraryUser() {
-        BookEntity bookEntity = getBookEntity();
-        BookLoreUser user = BookLoreUser.builder()
-                .build();
-
-        when(bookRepository.findById(1L)).thenReturn(Optional.of(bookEntity));
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isFalse();
-
-        verifyNoInteractions(contentRestrictionService);
-    }
-
-    @Test
-    void validateBookContentAccess_rejectsOnLibraryAccess() {
-        LibraryEntity otherLibrary = LibraryEntity.builder().id(2L).build();
-
-        BookEntity bookEntity = getBookEntity();
-        BookLoreUser user = getBookloreUser(false, List.of(otherLibrary));
-
-        when(bookRepository.findById(1L)).thenReturn(Optional.of(bookEntity));
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isFalse();
-
-        verifyNoInteractions(contentRestrictionService);
-    }
-
-    @Test
-    void validateBookContentAccess_rejectsOnContentRestrictions() {
-        BookEntity bookEntity = getBookEntity();
-        BookLoreUser user = getBookloreUser(false, List.of(library));
-
-        when(bookRepository.findById(1L)).thenReturn(Optional.of(bookEntity));
-        when(
-                contentRestrictionService.applyRestrictions(List.of(bookEntity), user.getId())
-        ).thenReturn(List.of());
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isFalse();
-    }
-
-    @Test
-    void validateBookContentAccess_rejectsOnMissingBook() {
-        BookLoreUser user = getBookloreUser(false, List.of());
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isFalse();
-    }
-
-    @Test
-    void validateBookContentAccess_adminAlwaysHasAccess() {
-        BookLoreUser user = getBookloreUser(true, List.of());
-
-        boolean actual = komgaService.validateBookContentAccess(user, 1L);
-
-        assertThat(actual).isTrue();
-    }
-
-    BookEntity getBookEntity() {
-        return BookEntity.builder()
-                .id(1L)
-                .library(library)
-                .build();
-    }
-
-    BookLoreUser getBookloreUser(boolean isAdmin, List<LibraryEntity> libraries) {
-        BookLoreUser.UserPermissions perms = new BookLoreUser.UserPermissions();
-
-        perms.setAdmin(isAdmin);
-
-        return BookLoreUser.builder()
-                .id(1L)
-                .permissions(perms)
-                .assignedLibraries(
-                        libraries
-                                .stream()
-                                .map(l -> Library.builder().id(l.getId()).build())
-                                .toList()
-                )
-                .build();
     }
 }
