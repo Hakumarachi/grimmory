@@ -1,5 +1,7 @@
 package org.booklore.komga.web.json;
 
+import org.booklore.komga.config.ConditionalOnKomgaEnabled;
+
 import org.booklore.komga.web.json.KomgaCleanContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -12,6 +14,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
  * it enables clean mode which filters out "Lock" fields, null values, and empty arrays
  * from the JSON response. Supports both ?clean and ?clean=true syntax.
  */
+@ConditionalOnKomgaEnabled
 @Component
 public class KomgaCleanInterceptor implements HandlerInterceptor {
 

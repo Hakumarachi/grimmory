@@ -1,5 +1,7 @@
 package org.booklore.komga.mapper;
 
+import org.booklore.komga.config.ConditionalOnKomgaEnabled;
+
 import org.booklore.komga.web.json.KomgaCleanContext;
 import org.booklore.model.dto.MagicShelf;
 import org.booklore.komga.dto.*;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+@ConditionalOnKomgaEnabled
 @Component
 @RequiredArgsConstructor
 public class KomgaMapper {

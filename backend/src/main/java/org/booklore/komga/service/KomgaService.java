@@ -1,5 +1,7 @@
 package org.booklore.komga.service;
 
+import org.booklore.komga.config.ConditionalOnKomgaEnabled;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
@@ -48,6 +50,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 @Slf4j
+@ConditionalOnKomgaEnabled
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)

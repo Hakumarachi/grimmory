@@ -11,6 +11,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * Registers the Komga API interceptors. Kept apart from the core {@code WebMvcConfig}
  * so the Komga module stays self-contained.
  */
+@ConditionalOnKomgaEnabled
 @Configuration
 @RequiredArgsConstructor
 public class KomgaWebConfig implements WebMvcConfigurer {

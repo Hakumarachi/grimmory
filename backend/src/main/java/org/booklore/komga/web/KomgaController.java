@@ -1,5 +1,7 @@
 package org.booklore.komga.web;
 
+import org.booklore.komga.config.ConditionalOnKomgaEnabled;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -42,6 +44,7 @@ import java.util.List;
         "When present (?clean or ?clean=true), responses exclude fields ending with 'Lock', null values, and empty arrays, " +
         "resulting in smaller and cleaner JSON payloads.")
 @Slf4j
+@ConditionalOnKomgaEnabled
 @RestController
 @RequestMapping(value = "/komga/api", produces = "application/json")
 @RequiredArgsConstructor

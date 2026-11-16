@@ -1,5 +1,7 @@
 package org.booklore.komga.web;
 
+import org.booklore.komga.config.ConditionalOnKomgaEnabled;
+
 import org.booklore.service.appsettings.AppSettingService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -7,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+@ConditionalOnKomgaEnabled
 @Component
 @RequiredArgsConstructor
 public class KomgaEnabledInterceptor implements HandlerInterceptor {

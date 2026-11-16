@@ -14,6 +14,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * as the OPDS chain, defined in the core {@code SecurityConfig}). Order 2: right after the OPDS chain,
  * before the JWT chain that also matches {@code /komga/**}.
  */
+@ConditionalOnKomgaEnabled
 @Configuration
 public class KomgaSecurityConfig {
 

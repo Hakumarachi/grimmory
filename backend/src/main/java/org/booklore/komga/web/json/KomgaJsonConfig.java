@@ -1,5 +1,7 @@
 package org.booklore.komga.web.json;
 
+import org.booklore.komga.config.ConditionalOnKomgaEnabled;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
@@ -12,6 +14,7 @@ import java.util.List;
 /**
  * Jackson configuration for Komga API clean mode.
  */
+@ConditionalOnKomgaEnabled
 @Configuration
 public class KomgaJsonConfig {
 
