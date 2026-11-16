@@ -1,5 +1,7 @@
 package org.booklore.service.komga;
 
+import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.mapper.komga.KomgaMapper;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
@@ -60,6 +62,12 @@ class KomgaServiceTest {
     @Mock
     private ContentRestrictionService contentRestrictionService;
 
+    @Mock
+    private AuthenticationService authenticationService;
+
+    @Mock
+    private UserContentRestrictionRepository restrictionRepository;
+
     @InjectMocks
     private KomgaService komgaService;
 
@@ -75,6 +83,10 @@ class KomgaServiceTest {
         AppSettings appSettings = new AppSettings();
         appSettings.setKomgaGroupUnknown(true);
         lenient().when(appSettingService.getAppSettings()).thenReturn(appSettings);
+        BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
+        adminPermissions.setAdmin(true);
+        lenient().when(authenticationService.getAuthenticatedUser())
+                .thenReturn(BookLoreUser.builder().id(1L).permissions(adminPermissions).build());
 
         // Create multiple books for testing pagination
         seriesBooks = new ArrayList<>();

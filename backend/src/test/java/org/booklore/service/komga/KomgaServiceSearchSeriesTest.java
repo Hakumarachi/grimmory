@@ -1,5 +1,8 @@
 package org.booklore.service.komga;
 
+import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.repository.UserContentRestrictionRepository;
+import org.booklore.model.dto.BookLoreUser;
 import org.booklore.mapper.komga.KomgaMapper;
 import org.booklore.model.dto.komga.KomgaPageableDto;
 import org.booklore.model.dto.komga.KomgaSeriesDto;
@@ -42,6 +45,12 @@ class KomgaServiceSearchSeriesTest {
     @Mock
     private AppSettingService appSettingService;
 
+    @Mock
+    private AuthenticationService authenticationService;
+
+    @Mock
+    private UserContentRestrictionRepository restrictionRepository;
+
     @InjectMocks
     private KomgaService komgaService;
 
@@ -50,6 +59,10 @@ class KomgaServiceSearchSeriesTest {
         AppSettings appSettings = new AppSettings();
         appSettings.setKomgaGroupUnknown(true);
         lenient().when(appSettingService.getAppSettings()).thenReturn(appSettings);
+        BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
+        adminPermissions.setAdmin(true);
+        lenient().when(authenticationService.getAuthenticatedUser())
+                .thenReturn(BookLoreUser.builder().id(1L).permissions(adminPermissions).build());
         lenient().when(komgaMapper.getUnknownSeriesName()).thenReturn(UNKNOWN);
 
         // Every series has one book in library 1, mapped to a DTO carrying its name
