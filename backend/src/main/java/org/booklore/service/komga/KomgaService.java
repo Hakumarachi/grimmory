@@ -13,7 +13,8 @@ import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
-import org.booklore.repository.projection.KomgaSeriesDateProjection;
+import org.booklore.repository.projection.KomgaBookWithoutSeriesProjection;
+import org.booklore.repository.projection.KomgaSeriesDatesProjection;
 import org.booklore.service.MagicShelfService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.reader.CbxReaderService;
@@ -306,12 +307,12 @@ public class KomgaService {
         switch (field) {
             case "random" -> Collections.shuffle(series);
             case "createdDate", "lastModifiedDate" -> {
-                Map<SeriesRef, Instant[]> dates = seriesDates(groupUnknown);
-                int index = "createdDate".equals(field) ? 0 : 1;
+                Map<SeriesRef, SeriesDates> dates = seriesDates(groupUnknown);
+                boolean created = "createdDate".equals(field);
                 Comparator<SeriesRef> byDate = Comparator.comparing(
                         ref -> {
-                            Instant[] d = dates.get(ref);
-                            return d != null ? d[index] : null;
+                            SeriesDates d = dates.get(ref);
+                            return d == null ? null : created ? d.created() : d.lastModified();
                         },
                         Comparator.nullsFirst(Comparator.<Instant>naturalOrder()));
                 // Stable sort: series with the same date keep their name order
@@ -326,34 +327,44 @@ public class KomgaService {
         }
     }
 
+    /** Oldest and newest book added in a series. */
+    private record SeriesDates(Instant created, Instant lastModified) {
+        SeriesDates merge(SeriesDates other) {
+            return new SeriesDates(
+                    created.isBefore(other.created) ? created : other.created,
+                    lastModified.isAfter(other.lastModified) ? lastModified : other.lastModified);
+        }
+    }
+
     /**
-     * Computes {created = oldest book added, lastModified = newest book added} for every series,
-     * keyed both per library and across all libraries (libraryId {@code null}).
+     * Computes the dates of every series, keyed both per library and across all libraries
+     * (libraryId {@code null}). Series with a name are aggregated in SQL; only books without
+     * series name are handled one by one, to derive their name like the series name queries do.
      */
-    private Map<SeriesRef, Instant[]> seriesDates(boolean groupUnknown) {
+    private Map<SeriesRef, SeriesDates> seriesDates(boolean groupUnknown) {
+        Map<SeriesRef, SeriesDates> dates = new HashMap<>();
+        for (KomgaSeriesDatesProjection row : bookRepository.findKomgaSeriesDates()) {
+            addSeriesDates(dates, row.getSeriesName(), row.getLibraryId(), row.getCreatedDate(), row.getLastModifiedDate());
+        }
+
         String unknownSeriesName = groupUnknown ? komgaMapper.getUnknownSeriesName() : null;
-        Map<SeriesRef, Instant[]> dates = new HashMap<>();
-        for (KomgaSeriesDateProjection row : bookRepository.findKomgaSeriesDateRows()) {
-            String name;
-            if (row.getSeriesName() != null) {
-                name = row.getSeriesName();
-            } else if (groupUnknown) {
-                name = unknownSeriesName;
-            } else {
-                name = row.getTitle() != null ? row.getTitle() : row.getFileName();
-            }
-            Instant addedOn = row.getAddedOn();
-            if (name == null || addedOn == null) {
-                continue;
-            }
-            for (SeriesRef key : List.of(new SeriesRef(name, row.getLibraryId()), new SeriesRef(name, null))) {
-                dates.merge(key, new Instant[]{addedOn, addedOn}, (a, b) -> new Instant[]{
-                        a[0].isBefore(b[0]) ? a[0] : b[0],
-                        a[1].isAfter(b[1]) ? a[1] : b[1]
-                });
-            }
+        for (KomgaBookWithoutSeriesProjection row : bookRepository.findKomgaBooksWithoutSeries()) {
+            String name = groupUnknown
+                    ? unknownSeriesName
+                    : (row.getTitle() != null ? row.getTitle() : row.getFileName());
+            addSeriesDates(dates, name, row.getLibraryId(), row.getAddedOn(), row.getAddedOn());
         }
         return dates;
+    }
+
+    private static void addSeriesDates(Map<SeriesRef, SeriesDates> dates, String name, Long libraryId,
+                                       Instant created, Instant lastModified) {
+        if (name == null || created == null || lastModified == null) {
+            return;
+        }
+        SeriesDates value = new SeriesDates(created, lastModified);
+        dates.merge(new SeriesRef(name, libraryId), value, SeriesDates::merge);
+        dates.merge(new SeriesRef(name, null), value, SeriesDates::merge);
     }
 
     public KomgaSeriesDto getSeriesById(String seriesId) {

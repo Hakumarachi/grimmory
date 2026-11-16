@@ -8,7 +8,8 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.projection.BookCoverUpdateProjection;
-import org.booklore.repository.projection.KomgaSeriesDateProjection;
+import org.booklore.repository.projection.KomgaBookWithoutSeriesProjection;
+import org.booklore.repository.projection.KomgaSeriesDatesProjection;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
@@ -356,13 +357,29 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<String> findDistinctSeriesNamesUngrouped();
 
     /**
-     * One row per non-deleted book with the fields needed to derive its Komga series name
-     * (series name, title, first book-format file name) and its added date.
-     * Used to sort Komga series by created / last modified date.
+     * Created / last modified dates (oldest / newest book added) of every Komga series
+     * that has a series name, per library. Used to sort Komga series by date.
      */
     @Query("""
             SELECT b.library.id as libraryId,
                    m.seriesName as seriesName,
+                   MIN(b.addedOn) as createdDate,
+                   MAX(b.addedOn) as lastModifiedDate
+            FROM BookEntity b
+            JOIN b.metadata m
+            WHERE (b.deleted IS NULL OR b.deleted = false)
+              AND m.seriesName IS NOT NULL
+            GROUP BY b.library.id, m.seriesName
+            """)
+    List<KomgaSeriesDatesProjection> findKomgaSeriesDates();
+
+    /**
+     * Non-deleted books without series name, with the fields needed to derive their Komga
+     * series name (title, first book-format file name) and their added date.
+     * Used to sort Komga series by date.
+     */
+    @Query("""
+            SELECT b.library.id as libraryId,
                    m.title as title,
                    (
                        SELECT bf2.fileName FROM BookFileEntity bf2
@@ -377,8 +394,9 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
             FROM BookEntity b
             LEFT JOIN b.metadata m
             WHERE (b.deleted IS NULL OR b.deleted = false)
+              AND m.seriesName IS NULL
             """)
-    List<KomgaSeriesDateProjection> findKomgaSeriesDateRows();
+    List<KomgaBookWithoutSeriesProjection> findKomgaBooksWithoutSeries();
 
     /**
      * Find books by series name for a library when groupUnknown=true.

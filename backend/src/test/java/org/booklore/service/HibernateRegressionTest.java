@@ -637,46 +637,87 @@ class HibernateRegressionTest {
     class KomgaSeriesDateRows {
 
         @Test
-        void findKomgaSeriesDateRows_returnsSeriesTitleFirstFileAndSkipsDeleted() {
-            LibraryEntity library = LibraryEntity.builder()
-                    .name("Komga Dates Library")
-                    .icon("book")
-                    .watch(false)
-                    .build();
-            entityManager.persist(library);
-
-            LibraryPathEntity libraryPath = LibraryPathEntity.builder()
-                    .library(library)
-                    .path("/komga")
-                    .build();
-            entityManager.persist(libraryPath);
+        void findKomgaSeriesDates_aggregatesPerLibraryAndSeriesAndSkipsDeleted() {
+            LibraryEntity library = persistLibrary("Komga Dates Library");
+            LibraryPathEntity libraryPath = persistLibraryPath(library, "/komga");
+            LibraryEntity otherLibrary = persistLibrary("Komga Dates Other Library");
+            LibraryPathEntity otherPath = persistLibraryPath(otherLibrary, "/komga-other");
             entityManager.flush();
 
-            Instant seriesAdded = Instant.parse("2026-01-01T00:00:00Z");
-            Instant looseAdded = Instant.parse("2026-01-02T00:00:00Z");
-            persistBook(library, libraryPath, "Series A", "Tome 1", "a1.cbz", seriesAdded, false);
-            persistBook(library, libraryPath, null, null, "loose.cbz", looseAdded, false);
-            persistBook(library, libraryPath, "Deleted Series", "Gone", "gone.cbz", Instant.now(), true);
+            persistBook(library, libraryPath, "Series A", "Tome 1", "a1.cbz", Instant.parse("2026-01-01T00:00:00Z"), false);
+            persistBook(library, libraryPath, "Series A", "Tome 2", "a2.cbz", Instant.parse("2026-01-05T00:00:00Z"), false);
+            persistBook(library, libraryPath, "Series A", "Tome 3", "a3.cbz", Instant.parse("2026-02-01T00:00:00Z"), true);
+            persistBook(otherLibrary, otherPath, "Series A", "Tome 1", "o1.cbz", Instant.parse("2026-03-01T00:00:00Z"), false);
+            persistBook(library, libraryPath, null, null, "loose.cbz", Instant.parse("2026-01-02T00:00:00Z"), false);
             entityManager.flush();
             entityManager.clear();
 
-            var rows = bookRepository.findKomgaSeriesDateRows().stream()
+            var rows = bookRepository.findKomgaSeriesDates().stream()
+                    .filter(r -> Set.of(library.getId(), otherLibrary.getId()).contains(r.getLibraryId()))
+                    .toList();
+
+            assertThat(rows).hasSize(2);
+            assertThat(rows).anySatisfy(r -> {
+                assertThat(r.getLibraryId()).isEqualTo(library.getId());
+                assertThat(r.getSeriesName()).isEqualTo("Series A");
+                assertThat(r.getCreatedDate()).isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
+                assertThat(r.getLastModifiedDate()).isEqualTo(Instant.parse("2026-01-05T00:00:00Z")); // deleted tome ignored
+            });
+            assertThat(rows).anySatisfy(r -> {
+                assertThat(r.getLibraryId()).isEqualTo(otherLibrary.getId());
+                assertThat(r.getCreatedDate()).isEqualTo(Instant.parse("2026-03-01T00:00:00Z"));
+            });
+        }
+
+        @Test
+        void findKomgaBooksWithoutSeries_returnsTitleOrFirstFileAndSkipsSeriesAndDeleted() {
+            LibraryEntity library = persistLibrary("Komga No Series Library");
+            LibraryPathEntity libraryPath = persistLibraryPath(library, "/komga-no-series");
+            entityManager.flush();
+
+            Instant standaloneAdded = Instant.parse("2026-01-01T00:00:00Z");
+            Instant looseAdded = Instant.parse("2026-01-02T00:00:00Z");
+            persistBook(library, libraryPath, "Series A", "Tome 1", "a1.cbz", Instant.now(), false);
+            persistBook(library, libraryPath, null, "Standalone", "standalone.cbz", standaloneAdded, false);
+            persistBook(library, libraryPath, null, null, "loose.cbz", looseAdded, false);
+            persistBook(library, libraryPath, null, "Gone", "gone.cbz", Instant.now(), true);
+            entityManager.flush();
+            entityManager.clear();
+
+            var rows = bookRepository.findKomgaBooksWithoutSeries().stream()
                     .filter(r -> library.getId().equals(r.getLibraryId()))
                     .toList();
 
             assertThat(rows).hasSize(2);
             assertThat(rows).anySatisfy(r -> {
-                assertThat(r.getSeriesName()).isEqualTo("Series A");
-                assertThat(r.getTitle()).isEqualTo("Tome 1");
-                assertThat(r.getFileName()).isEqualTo("a1.cbz");
-                assertThat(r.getAddedOn()).isEqualTo(seriesAdded);
+                assertThat(r.getTitle()).isEqualTo("Standalone");
+                assertThat(r.getFileName()).isEqualTo("standalone.cbz");
+                assertThat(r.getAddedOn()).isEqualTo(standaloneAdded);
             });
             assertThat(rows).anySatisfy(r -> {
-                assertThat(r.getSeriesName()).isNull();
                 assertThat(r.getTitle()).isNull();
                 assertThat(r.getFileName()).isEqualTo("loose.cbz");
                 assertThat(r.getAddedOn()).isEqualTo(looseAdded);
             });
+        }
+
+        private LibraryEntity persistLibrary(String name) {
+            LibraryEntity library = LibraryEntity.builder()
+                    .name(name)
+                    .icon("book")
+                    .watch(false)
+                    .build();
+            entityManager.persist(library);
+            return library;
+        }
+
+        private LibraryPathEntity persistLibraryPath(LibraryEntity library, String path) {
+            LibraryPathEntity libraryPath = LibraryPathEntity.builder()
+                    .library(library)
+                    .path(path)
+                    .build();
+            entityManager.persist(libraryPath);
+            return libraryPath;
         }
 
         private void persistBook(LibraryEntity library, LibraryPathEntity libraryPath, String seriesName,
