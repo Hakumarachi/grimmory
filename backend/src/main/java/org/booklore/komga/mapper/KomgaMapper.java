@@ -7,6 +7,9 @@ import org.booklore.model.dto.MagicShelf;
 import org.booklore.komga.dto.*;
 import org.booklore.model.entity.*;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.model.enums.ComicCreatorRole;
+
+import java.math.BigDecimal;
 import org.booklore.komga.core.KomgaSettingsGateway;
 import org.booklore.komga.series.SeriesIdCodec;
 import org.booklore.komga.series.SeriesNaming;
@@ -18,10 +21,9 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @ConditionalOnKomgaEnabled
 @Component
@@ -91,9 +93,9 @@ public class KomgaMapper {
                 .libraryId(libraryId.toString())
                 .name(seriesName)
                 .url("/komga/api/v1/series/" + seriesId)
-                .created(firstBook.getAddedOn())
-                .lastModified(firstBook.getAddedOn())
-                .fileLastModified(firstBook.getAddedOn())
+                .created(firstAdded(books))
+                .lastModified(lastAdded(books))
+                .fileLastModified(lastAdded(books))
                 .booksCount(books.size())
                 .booksReadCount(counts.read())
                 .booksUnreadCount(counts.unread())
@@ -110,7 +112,7 @@ public class KomgaMapper {
         String mediaType = getMediaType(bookFile.getBookType());
         Integer pageCount = metadata != null && metadata.getPageCount() != null ? metadata.getPageCount() : 0;
         return KomgaMediaDto.builder()
-                .status("READY")
+                .status(mediaStatus(bookFile.getBookType(), pageCount))
                 .mediaType(mediaType)
                 .mediaProfile(getMediaProfile(bookFile.getBookType()))
                 .pagesCount(pageCount)
@@ -122,16 +124,8 @@ public class KomgaMapper {
             return KomgaBookMetadataDto.builder().build();
         }
         
-        List<KomgaAuthorDto> authors = new ArrayList<>();
-        if (metadata.getAuthors() != null) {
-            authors = metadata.getAuthors().stream()
-                    .map(author -> KomgaAuthorDto.builder()
-                            .name(author.getName())
-                            .role("writer")
-                            .build())
-                    .toList();
-        }
-        
+        List<KomgaAuthorDto> authors = authorsOf(metadata);
+
         List<String> tags = new ArrayList<>();
         if (metadata.getTags() != null) {
             tags = metadata.getTags().stream()
@@ -144,7 +138,7 @@ public class KomgaMapper {
                 .titleLock(metadata.getTitleLocked())
                 .summary(nullIfEmptyInCleanMode(metadata.getDescription(), ""))
                 .summaryLock(metadata.getDescriptionLocked())
-                .number(nullIfEmptyInCleanMode(metadata.getSeriesNumber(), 1.0F).toString())
+                .number(formatNumber(nullIfEmptyInCleanMode(metadata.getSeriesNumber(), 1.0F)))
                 .numberLock(metadata.getSeriesNumberLocked())
                 .numberSort(nullIfEmptyInCleanMode(metadata.getSeriesNumber(), 1.0F))
                 .numberSortLock(metadata.getSeriesNumberLocked())
@@ -161,98 +155,173 @@ public class KomgaMapper {
                 .build();
     }
 
+    /**
+     * Series metadata aggregated over its books (sorted by number): genres and tags of every book, the most
+     * common language and publisher, the first summary, the highest age rating, the reading direction of most
+     * books. With a known total of volumes the series is {@code ENDED} (Mihon then shows it complete, or
+     * "publishing finished" when volumes are missing), else {@code ONGOING}.
+     */
     private KomgaSeriesMetadataDto aggregateSeriesMetadata(String seriesName, List<BookEntity> books) {
-        BookEntity firstBook = books.getFirst();
-        BookMetadataEntity firstMetadata = firstBook.getMetadata();
-        
-        List<String> genres = new ArrayList<>();
-        List<String> tags = new ArrayList<>();
-        
-        if (firstMetadata != null) {
-            if (firstMetadata.getCategories() != null) {
-                genres = firstMetadata.getCategories().stream()
-                        .map(CategoryEntity::getName)
-                        .toList();
-            }
-            if (firstMetadata.getTags() != null) {
-                tags = firstMetadata.getTags().stream()
-                        .map(TagEntity::getName)
-                        .toList();
-            }
-        }
-        String language = firstMetadata != null ? firstMetadata.getLanguage() : null;
-        String description = firstMetadata != null ? firstMetadata.getDescription() : null;
-        String publisher = firstMetadata != null ? firstMetadata.getPublisher() : null;
-        
+        List<BookMetadataEntity> metadata = books.stream().map(BookEntity::getMetadata).filter(Objects::nonNull).toList();
+
+        Integer totalBookCount = metadata.stream()
+                .map(BookMetadataEntity::getSeriesTotal)
+                .filter(total -> total != null && total > 0)
+                .max(Integer::compare)
+                .orElse(null);
+        Integer ageRating = metadata.stream()
+                .map(BookMetadataEntity::getAgeRating)
+                .filter(Objects::nonNull)
+                .max(Integer::compare)
+                .orElse(null);
+
         return KomgaSeriesMetadataDto.builder()
-                .status("ONGOING")
+                .status(totalBookCount != null ? "ENDED" : "ONGOING")
                 .statusLock(false)
                 .title(seriesName)
                 .titleLock(false)
                 .titleSort(seriesName)
                 .titleSortLock(false)
-                .summary(nullIfEmptyInCleanMode(description, ""))
+                .summary(nullIfEmptyInCleanMode(firstNonBlank(metadata, BookMetadataEntity::getDescription), ""))
                 .summaryLock(false)
-                .publisher(nullIfEmptyInCleanMode(publisher, ""))
+                .publisher(nullIfEmptyInCleanMode(mostCommon(metadata, BookMetadataEntity::getPublisher), ""))
                 .publisherLock(false)
-                .language(nullIfEmptyInCleanMode(language, "en"))
+                .language(nullIfEmptyInCleanMode(mostCommon(metadata, BookMetadataEntity::getLanguage), ""))
                 .languageLock(false)
-                .genres(genres)
+                .genres(namesOf(metadata, BookMetadataEntity::getCategories, CategoryEntity::getName))
                 .genresLock(false)
-                .tags(tags)
+                .tags(namesOf(metadata, BookMetadataEntity::getTags, TagEntity::getName))
                 .tagsLock(false)
-                .totalBookCount(books.size())
+                .totalBookCount(totalBookCount)
                 .totalBookCountLock(false)
-                // not used but required right now by Mihon/komga apps
+                .ageRating(ageRating)
                 .ageRatingLock(false)
-                .readingDirection("LEFT_TO_RIGHT")
+                .readingDirection(readingDirection(metadata))
                 .readingDirectionLock(false)
+                .created(firstAdded(books))
+                .lastModified(lastAdded(books))
                 .build();
     }
 
     private KomgaBookMetadataAggregationDto aggregateBooksMetadata(List<BookEntity> books) {
-        Set<String> authorNames = new HashSet<>();
-        Set<String> allTags = new HashSet<>();
-        String releaseDate = null;
-        String summary = null;
-        
-        BookEntity firstBook = books.getFirst();
-            for (BookEntity book : books) {
-            BookMetadataEntity metadata = book.getMetadata();
-            if (metadata != null) {
-                if (metadata.getAuthors() != null) {
-                    metadata.getAuthors().forEach(author -> authorNames.add(author.getName()));
-                }
-                
-                if (metadata.getTags() != null) {
-                    metadata.getTags().forEach(tag -> allTags.add(tag.getName()));
-                }
-                
-                if (releaseDate == null && metadata.getPublishedDate() != null) {
-                    releaseDate = metadata.getPublishedDate().format(DATE_FORMATTER);
-                }
-                
-                if (summary == null && metadata.getDescription() != null) {
-                    summary = metadata.getDescription();
-                }
-            }
-        }
-        
-        List<KomgaAuthorDto> authors = authorNames.stream()
-                .map(name -> KomgaAuthorDto.builder().name(name).role("writer").build())
-                .toList();
-        
+        List<BookMetadataEntity> metadata = books.stream().map(BookEntity::getMetadata).filter(Objects::nonNull).toList();
+
+        // Every author of every book, once per name and role
+        Map<String, KomgaAuthorDto> authors = new LinkedHashMap<>();
+        metadata.forEach(m -> authorsOf(m).forEach(author -> authors.putIfAbsent(author.getRole() + "|" + author.getName(), author)));
+
+        String releaseDate = metadata.stream()
+                .map(BookMetadataEntity::getPublishedDate)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .map(date -> date.format(DATE_FORMATTER))
+                .orElse(null);
+
         return KomgaBookMetadataAggregationDto.builder()
-                .authors(authors)
-                .tags(new ArrayList<>(allTags))
-                .created(firstBook.getAddedOn())
-                .lastModified(firstBook.getAddedOn())
+                .authors(new ArrayList<>(authors.values()))
+                .tags(namesOf(metadata, BookMetadataEntity::getTags, TagEntity::getName))
+                .created(firstAdded(books))
+                .lastModified(lastAdded(books))
                 .releaseDate(releaseDate)
-                .summary(nullIfEmptyInCleanMode(summary, ""))
+                .summary(nullIfEmptyInCleanMode(firstNonBlank(metadata, BookMetadataEntity::getDescription), ""))
                 // summaryNumber is typically empty, but in clean mode should be null to be filtered
                 .summaryNumber(nullIfEmptyInCleanMode(null, ""))
                 .summaryLock(false)
                 .build();
+    }
+
+    /** Writers (the book authors), then the comic creators with their ComicInfo role, as Komga names them. */
+    private static List<KomgaAuthorDto> authorsOf(BookMetadataEntity metadata) {
+        List<KomgaAuthorDto> authors = new ArrayList<>();
+        if (metadata.getAuthors() != null) {
+            metadata.getAuthors().forEach(author -> authors.add(author(author.getName(), "writer")));
+        }
+        ComicMetadataEntity comic = metadata.getComicMetadata();
+        if (comic != null && comic.getCreatorMappings() != null) {
+            comic.getCreatorMappings().stream()
+                    .filter(mapping -> mapping.getCreator() != null && mapping.getRole() != null)
+                    .sorted(Comparator.comparing((ComicCreatorMappingEntity mapping) -> mapping.getRole().ordinal())
+                            .thenComparing(mapping -> mapping.getCreator().getName(), Comparator.nullsLast(Comparator.naturalOrder())))
+                    .forEach(mapping -> authors.add(author(mapping.getCreator().getName(), komgaRole(mapping.getRole()))));
+        }
+        return authors;
+    }
+
+    private static KomgaAuthorDto author(String name, String role) {
+        return KomgaAuthorDto.builder().name(name).role(role).build();
+    }
+
+    static String komgaRole(ComicCreatorRole role) {
+        return switch (role) {
+            case PENCILLER -> "penciller";
+            case INKER -> "inker";
+            case COLORIST -> "colorist";
+            case LETTERER -> "letterer";
+            case COVER_ARTIST -> "cover";
+            case EDITOR -> "editor";
+        };
+    }
+
+    /** Komga reading direction of most books with comic metadata; left to right by default. */
+    static String readingDirection(List<BookMetadataEntity> metadata) {
+        String direction = mostCommon(metadata, m -> m.getComicMetadata() != null ? m.getComicMetadata().getReadingDirection() : null);
+        if (direction == null) {
+            return "LEFT_TO_RIGHT";
+        }
+        return switch (direction.trim().toLowerCase(Locale.ROOT)) {
+            case "rtl" -> "RIGHT_TO_LEFT";
+            case "ttb", "vertical" -> "VERTICAL";
+            case "webtoon" -> "WEBTOON";
+            default -> "LEFT_TO_RIGHT";
+        };
+    }
+
+    /** Book number as Komga writes it: {@code 1}, {@code 10.5}. */
+    static String formatNumber(Float number) {
+        if (number == null) {
+            return null;
+        }
+        return number == Math.rint(number) && !Float.isInfinite(number)
+                ? String.valueOf(number.longValue())
+                : BigDecimal.valueOf(number).stripTrailingZeros().toPlainString();
+    }
+
+    private static <T> List<String> namesOf(List<BookMetadataEntity> metadata,
+                                            Function<BookMetadataEntity, Collection<T>> collection,
+                                            Function<T, String> name) {
+        return metadata.stream()
+                .map(collection)
+                .filter(Objects::nonNull)
+                .flatMap(Collection::stream)
+                .map(name)
+                .filter(value -> value != null && !value.isBlank())
+                .collect(Collectors.toCollection(TreeSet::new))
+                .stream()
+                .toList();
+    }
+
+    /** Most frequent non-blank value; ties go to the first book. */
+    static String mostCommon(List<BookMetadataEntity> metadata, Function<BookMetadataEntity, String> value) {
+        Map<String, Long> counts = metadata.stream()
+                .map(value)
+                .filter(v -> v != null && !v.isBlank())
+                .collect(Collectors.groupingBy(Function.identity(), LinkedHashMap::new, Collectors.counting()));
+        return counts.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(null);
+    }
+
+    private static String firstNonBlank(List<BookMetadataEntity> metadata, Function<BookMetadataEntity, String> value) {
+        return metadata.stream().map(value).filter(v -> v != null && !v.isBlank()).findFirst().orElse(null);
+    }
+
+    private static Instant firstAdded(List<BookEntity> books) {
+        return books.stream().map(BookEntity::getAddedOn).filter(Objects::nonNull).min(Comparator.naturalOrder()).orElse(null);
+    }
+
+    private static Instant lastAdded(List<BookEntity> books) {
+        return books.stream().map(BookEntity::getAddedOn).filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(null);
     }
 
     public String getBookSeriesName(BookEntity book) {
@@ -262,6 +331,20 @@ public class KomgaMapper {
     private String generateSeriesId(BookEntity book) {
         // Pseudo-ID based on library and series name
         return SeriesIdCodec.encode(book.getLibrary().getId(), getBookSeriesName(book));
+    }
+
+    /**
+     * {@code READY}, or {@code UNSUPPORTED} for audiobooks and {@code UNKNOWN} for comics and PDFs whose page
+     * count is not known yet (they cannot be read page by page).
+     */
+    static String mediaStatus(BookFileType bookType, int pageCount) {
+        if (bookType == BookFileType.AUDIOBOOK) {
+            return "UNSUPPORTED";
+        }
+        if ((bookType == BookFileType.CBX || bookType == BookFileType.PDF) && pageCount < 1) {
+            return "UNKNOWN";
+        }
+        return "READY";
     }
 
     private String getMediaType(BookFileType bookType) {
@@ -291,7 +374,7 @@ public class KomgaMapper {
             case AZW3 -> "EPUB";
             case EPUB -> "EPUB";
             case CBX -> "DIVINA"; // DIVINA is for comic books
-            case FB2 -> "DIVINA";
+            case FB2 -> "EPUB"; // FB2 is text: Komga image readers cannot show it
             case AUDIOBOOK -> "AUDIOBOOK";
         };
     }

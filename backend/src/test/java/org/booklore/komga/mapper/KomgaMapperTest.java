@@ -241,7 +241,7 @@ class KomgaMapperTest {
         assertThat(seriesDto).isNotNull();
         assertThat(seriesDto.getMetadata()).isNotNull();
         assertThat(seriesDto.getMetadata().getSummary()).isEqualTo("");
-        assertThat(seriesDto.getMetadata().getLanguage()).isEqualTo("en");
+        assertThat(seriesDto.getMetadata().getLanguage()).isEmpty();
         assertThat(seriesDto.getMetadata().getPublisher()).isEqualTo("");
     }
 }
