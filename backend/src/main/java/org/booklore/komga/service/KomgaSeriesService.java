@@ -14,6 +14,7 @@ import org.booklore.komga.dto.KomgaSeriesDto;
 import org.booklore.komga.dto.KomgaSeriesSearchRequestDto;
 import org.booklore.komga.mapper.KomgaMapper;
 import org.booklore.komga.progress.KomgaProgressReader;
+import org.booklore.komga.progress.KomgaReadState;
 import org.booklore.komga.progress.ProgressSnapshot;
 import org.booklore.komga.series.SeriesKey;
 import org.booklore.komga.service.KomgaSeriesFinder.ResolvedSeries;
@@ -59,7 +60,8 @@ public class KomgaSeriesService {
      * Komga {@code POST /api/v1/series/list}: search series with a condition tree,
      * a full text search term and a sort.
      * <p>
-     * Supported: {@code libraryId} conditions (any {@code allOf}/{@code anyOf} nesting, operator {@code is}),
+     * Supported: {@code libraryId} and {@code readStatus} conditions (any {@code allOf}/{@code anyOf} nesting,
+     * operator {@code is}; several values of the same field match any of them),
      * {@code fullTextSearch} (case and accent insensitive match of every term on the series name),
      * sorts {@code metadata.titleSort}, {@code name}, {@code relevance}, {@code createdDate},
      * {@code lastModifiedDate} and {@code random}. Other conditions are ignored.
@@ -76,6 +78,11 @@ public class KomgaSeriesService {
 
         if (!terms.isEmpty()) {
             series.removeIf(ref -> !KomgaSeriesSearch.matchesAll(ref.name(), terms));
+        }
+
+        Set<KomgaReadState> readStates = request != null ? KomgaSeriesSearch.collectReadStates(request.getCondition()) : Set.of();
+        if (!readStates.isEmpty() && readStates.size() < KomgaReadState.values().length) {
+            keepReadStates(series, readStates, access, groupUnknown);
         }
 
         sortSeries(series, sort, groupUnknown);
@@ -149,6 +156,23 @@ public class KomgaSeriesService {
             });
             log.debug("Mapped {} series DTOs for this page", content.size());
             return content;
+        });
+    }
+
+    /**
+     * Keeps the series whose read status (for the current user) is one of {@code states}. Needs the books of
+     * every candidate series, so it is only done when the request filters on the read status.
+     */
+    private void keepReadStates(List<SeriesKey> series, Set<KomgaReadState> states, KomgaAccess access, boolean groupUnknown) {
+        Map<SeriesKey, List<BookEntity>> booksBySeries = new HashMap<>();
+        for (SeriesKey ref : series) {
+            booksBySeries.put(ref, seriesFinder.visibleBooks(ref, access, groupUnknown));
+        }
+        ProgressSnapshot progress = progressReader.load(access,
+                booksBySeries.values().stream().flatMap(List::stream).toList());
+        series.removeIf(ref -> {
+            List<BookEntity> books = booksBySeries.get(ref);
+            return books.isEmpty() || !states.contains(progress.counts(books).seriesState());
         });
     }
 

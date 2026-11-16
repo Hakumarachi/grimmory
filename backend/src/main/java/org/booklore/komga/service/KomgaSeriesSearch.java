@@ -4,14 +4,18 @@ import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.JsonNode;
 
 import java.text.Normalizer;
+import org.booklore.komga.progress.KomgaReadState;
+
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
-/** Parsing of the Komga {@code series/list} request: library conditions and full text search. */
+/** Parsing of the Komga {@code series/list} request: library and read status conditions, full text search. */
 @Slf4j
 final class KomgaSeriesSearch {
 
@@ -24,31 +28,47 @@ final class KomgaSeriesSearch {
     /** Collects the values of every {@code libraryId} leaf with operator {@code is}, at any depth. */
     static Set<Long> collectLibraryIds(JsonNode condition) {
         Set<Long> ids = new LinkedHashSet<>();
-        collectLibraryIds(condition, ids);
+        collectIs(condition, "libraryId", value -> {
+            try {
+                ids.add(Long.parseLong(value.trim()));
+            } catch (NumberFormatException e) {
+                log.debug("Ignoring non-numeric Komga libraryId condition: {}", value);
+            }
+        });
         return ids;
     }
 
-    private static void collectLibraryIds(JsonNode node, Set<Long> ids) {
+    /** Collects the values of every {@code readStatus} leaf with operator {@code is}, at any depth. */
+    static Set<KomgaReadState> collectReadStates(JsonNode condition) {
+        Set<KomgaReadState> states = EnumSet.noneOf(KomgaReadState.class);
+        collectIs(condition, "readStatus", value -> {
+            try {
+                states.add(KomgaReadState.valueOf(value.trim().toUpperCase(Locale.ROOT)));
+            } catch (IllegalArgumentException e) {
+                log.debug("Ignoring unknown Komga readStatus condition: {}", value);
+            }
+        });
+        return states;
+    }
+
+    /** Calls {@code consumer} with the value of every {@code field} leaf with operator {@code is}, at any depth. */
+    private static void collectIs(JsonNode node, String field, Consumer<String> consumer) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return;
         }
         if (node.isArray()) {
-            node.forEach(child -> collectLibraryIds(child, ids));
+            node.forEach(child -> collectIs(child, field, consumer));
             return;
         }
         if (!node.isObject()) {
             return;
         }
-        JsonNode libraryId = node.get("libraryId");
-        if (libraryId != null && libraryId.isObject() && "is".equals(libraryId.path("operator").asString(""))) {
-            try {
-                ids.add(Long.parseLong(libraryId.path("value").asString("").trim()));
-            } catch (NumberFormatException e) {
-                log.debug("Ignoring non-numeric Komga libraryId condition: {}", libraryId);
-            }
+        JsonNode leaf = node.get(field);
+        if (leaf != null && leaf.isObject() && "is".equals(leaf.path("operator").asString(""))) {
+            consumer.accept(leaf.path("value").asString(""));
         }
-        collectLibraryIds(node.get("allOf"), ids);
-        collectLibraryIds(node.get("anyOf"), ids);
+        collectIs(node.get("allOf"), field, consumer);
+        collectIs(node.get("anyOf"), field, consumer);
     }
 
     /** Splits a Komga full text search (Lucene-escaped) into normalized terms. */

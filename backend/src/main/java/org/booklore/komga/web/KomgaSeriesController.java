@@ -33,7 +33,7 @@ public class KomgaSeriesController {
 
     @Operation(summary = "Search series",
             description = "Komga 1.19+ search API, used by Komga clients such as Mihon to browse and search. " +
-                    "Supports libraryId conditions, fullTextSearch on the series name and sorting by " +
+                    "Supports libraryId and readStatus conditions, fullTextSearch on the series name and sorting by " +
                     "metadata.titleSort, relevance, createdDate, lastModifiedDate or random. Other conditions are ignored.")
     @PostMapping("/v1/series/list")
     public ResponseEntity<String> searchSeries(

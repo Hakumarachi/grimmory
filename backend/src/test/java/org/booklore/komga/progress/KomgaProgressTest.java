@@ -132,6 +132,14 @@ class KomgaProgressTest {
         assertThat(new KomgaProgressReader(gateway).load(null, List.of())).isEqualTo(ProgressSnapshot.EMPTY);
     }
 
+    @Test
+    void seriesStateFollowsItsBooks() {
+        assertThat(new ReadCounts(3, 0, 0).seriesState()).isEqualTo(KomgaReadState.READ);
+        assertThat(new ReadCounts(0, 3, 0).seriesState()).isEqualTo(KomgaReadState.UNREAD);
+        assertThat(new ReadCounts(1, 2, 0).seriesState()).isEqualTo(KomgaReadState.IN_PROGRESS);
+        assertThat(new ReadCounts(0, 2, 1).seriesState()).isEqualTo(KomgaReadState.IN_PROGRESS);
+    }
+
     private static BookEntity book(Long id, BookFileType type) {
         BookEntity book = BookEntity.builder().id(id).build();
         BookFileEntity file = BookFileEntity.builder().id(id).book(book).bookType(type).isBookFormat(true).build();

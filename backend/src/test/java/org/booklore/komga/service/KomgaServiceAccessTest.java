@@ -292,6 +292,36 @@ class KomgaServiceAccessTest {
         verify(komgaMapper).toKomgaBookDto(eq(book(103L)), eq(BookProgress.NONE));
     }
 
+    @Test
+    void searchFiltersSeriesOnTheReadStatusOfTheCurrentUser() {
+        loginAsUser(1L);
+        seriesIn(1L, "Akira", 101L, 102L);
+        seriesIn(1L, "Blame", 103L, 104L);
+        seriesIn(1L, "Claymore", 105L);
+        when(progressGateway.bookProgress(eq(10L), anySet())).thenReturn(Map.of(
+                101L, progress(101L, ReadStatus.READ),
+                102L, progress(102L, ReadStatus.READ),
+                103L, progress(103L, ReadStatus.READ),
+                105L, progress(105L, ReadStatus.ABANDONED)));
+
+        KomgaSeriesSearchRequestDto unreadOrInProgress = KomgaSeriesSearchRequestDto.builder()
+                .condition(JsonMapper.builder().build().readTree("""
+                        {"anyOf":[{"readStatus":{"operator":"is","value":"UNREAD"}},
+                                  {"readStatus":{"operator":"is","value":"IN_PROGRESS"}}]}
+                        """))
+                .build();
+        KomgaSeriesSearchRequestDto read = KomgaSeriesSearchRequestDto.builder()
+                .condition(JsonMapper.builder().build().readTree("""
+                        {"allOf":[{"libraryId":{"operator":"is","value":"1"}},{"readStatus":{"operator":"is","value":"READ"}}]}
+                        """))
+                .build();
+
+        assertThat(seriesService.searchSeries(unreadOrInProgress, null, 0, 20, false).getContent())
+                .extracting(KomgaSeriesDto::getName).containsExactly("Blame", "Claymore");
+        assertThat(seriesService.searchSeries(read, null, 0, 20, false).getContent())
+                .extracting(KomgaSeriesDto::getName).containsExactly("Akira");
+    }
+
     // ==================== Books ====================
 
     @Test

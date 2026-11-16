@@ -3,6 +3,7 @@ package org.booklore.komga.service;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.komga.mapper.KomgaMapper;
 import org.booklore.komga.access.KomgaAccessResolver;
+import org.booklore.komga.progress.KomgaReadState;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
 import org.booklore.komga.core.KomgaProgressGateway;
@@ -240,6 +241,21 @@ class KomgaServiceSearchSeriesTest {
 
         assertThat(KomgaSeriesSearch.collectLibraryIds(condition)).containsExactly(5L);
         assertThat(KomgaSeriesSearch.collectLibraryIds(null)).isEmpty();
+    }
+
+    @Test
+    void collectReadStatesKeepsKnownValuesOfIsLeaves() {
+        JsonNode condition = JSON.readTree("""
+                {"allOf":[
+                  {"anyOf":[{"readStatus":{"operator":"is","value":"UNREAD"}},{"readStatus":{"operator":"is","value":"in_progress"}}]},
+                  {"readStatus":{"operator":"isNot","value":"READ"}},
+                  {"readStatus":{"operator":"is","value":"NOPE"}}
+                ]}
+                """);
+
+        assertThat(KomgaSeriesSearch.collectReadStates(condition))
+                .containsExactlyInAnyOrder(KomgaReadState.UNREAD, KomgaReadState.IN_PROGRESS);
+        assertThat(KomgaSeriesSearch.collectReadStates(null)).isEmpty();
     }
 
     @Test
