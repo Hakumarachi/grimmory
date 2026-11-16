@@ -19,4 +19,6 @@ public class KomgaReadProgressDto {
     private Instant readDate;
     private Instant created;
     private Instant lastModified;
+    private String deviceId;
+    private String deviceName;
 }

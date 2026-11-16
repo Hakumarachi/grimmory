@@ -5,6 +5,8 @@ import org.booklore.komga.mapper.KomgaMapper;
 import org.booklore.komga.access.KomgaAccessResolver;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaProgressGateway;
+import org.booklore.komga.progress.KomgaProgressReader;
 import org.booklore.komga.core.KomgaSettingsGateway;
 import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.komga.dto.KomgaPageableDto;
@@ -54,6 +56,9 @@ class KomgaServiceSearchSeriesTest {
     @Mock
     private KomgaContentGateway contentGateway;
 
+    @Mock
+    private KomgaProgressGateway progressGateway;
+
     private KomgaLibraryService libraryService;
     private KomgaSeriesService seriesService;
     private KomgaBookService bookService;
@@ -62,9 +67,10 @@ class KomgaServiceSearchSeriesTest {
     void setUp() {
         KomgaAccessResolver accessResolver = new KomgaAccessResolver(accessGateway, komgaBookRepository);
         libraryService = new KomgaLibraryService(komgaLibraryRepository, komgaMapper, accessResolver);
+        KomgaProgressReader progressReader = new KomgaProgressReader(progressGateway);
         seriesService = new KomgaSeriesService(new KomgaSeriesFinder(komgaBookRepository, accessResolver),
-                komgaMapper, accessResolver, settings, contentGateway);
-        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway);
+                komgaMapper, accessResolver, settings, contentGateway, progressReader);
+        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway, progressReader);
         lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         lenient().when(settings.groupUnknown()).thenReturn(true);
         BookLoreUser.UserPermissions adminPermissions = new BookLoreUser.UserPermissions();
@@ -77,7 +83,7 @@ class KomgaServiceSearchSeriesTest {
                 .thenAnswer(inv -> List.of(book(1L)));
         lenient().when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(anyString(), anyLong(), eq(UNKNOWN)))
                 .thenAnswer(inv -> List.of(book(inv.getArgument(1))));
-        lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any()))
+        lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any(), any()))
                 .thenAnswer(inv -> KomgaSeriesDto.builder()
                         .name(inv.getArgument(0))
                         .libraryId(String.valueOf((Long) inv.getArgument(1)))

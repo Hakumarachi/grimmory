@@ -13,6 +13,8 @@ import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
 import org.booklore.komga.dto.KomgaSeriesSearchRequestDto;
 import org.booklore.komga.mapper.KomgaMapper;
+import org.booklore.komga.progress.KomgaProgressReader;
+import org.booklore.komga.progress.ProgressSnapshot;
 import org.booklore.komga.series.SeriesKey;
 import org.booklore.komga.service.KomgaSeriesFinder.ResolvedSeries;
 import org.booklore.komga.service.KomgaSeriesFinder.SeriesDates;
@@ -37,6 +39,7 @@ public class KomgaSeriesService {
     private final KomgaAccessResolver accessResolver;
     private final KomgaSettingsGateway settings;
     private final KomgaContentGateway contentGateway;
+    private final KomgaProgressReader progressReader;
 
     public KomgaPageableDto<KomgaSeriesDto> getAllSeries(Long libraryId, int page, int size, boolean unpaged) {
         log.debug("Getting all series for libraryId: {}, page: {}, size: {}", libraryId, page, size);
@@ -83,40 +86,59 @@ public class KomgaSeriesService {
     }
 
     public KomgaSeriesDto getSeriesById(String seriesId) {
-        ResolvedSeries series = seriesFinder.resolve(seriesId, accessResolver.current(), settings.groupUnknown())
+        KomgaAccess access = accessResolver.current();
+        ResolvedSeries series = seriesFinder.resolve(seriesId, access, settings.groupUnknown())
                 .orElseThrow(() -> ApiError.GENERIC_NOT_FOUND.createException("Series not found: " + seriesId));
-        return komgaMapper.toKomgaSeriesDto(series.name(), series.libraryId(), series.books());
+        ProgressSnapshot progress = progressReader.load(access, series.books());
+        return komgaMapper.toKomgaSeriesDto(series.name(), series.libraryId(), series.books(), progress.counts(series.books()));
     }
 
     public KomgaPageableDto<KomgaBookDto> getBooksBySeries(String seriesId, int page, int size, boolean unpaged) {
+        KomgaAccess access = accessResolver.current();
         // Unknown or hidden series: empty page, like a Komga search with a seriesId condition
-        List<BookEntity> seriesBooks = seriesFinder.resolve(seriesId, accessResolver.current(), settings.groupUnknown())
-                .map(ResolvedSeries::books)
-                .orElse(List.of());
-        return KomgaPaging.page(seriesBooks, page, size, unpaged,
-                books -> books.stream().map(komgaMapper::toKomgaBookDto).toList());
+        List<BookEntity> seriesBooks = visibleSeriesBooks(seriesId, access);
+        return KomgaPaging.page(seriesBooks, page, size, unpaged, books -> {
+            ProgressSnapshot progress = progressReader.load(access, books);
+            return books.stream().map(book -> komgaMapper.toKomgaBookDto(book, progress.of(book))).toList();
+        });
     }
 
     /** Thumbnail of a series: the one of its first visible book; {@code null} when there is none. */
     public Resource getSeriesThumbnail(String seriesId) {
-        KomgaPageableDto<KomgaBookDto> books = getBooksBySeries(seriesId, 0, 1, false);
-        if (books.getContent().isEmpty()) {
-            return null;
-        }
-        return contentGateway.thumbnail(Long.parseLong(books.getContent().getFirst().getId()));
+        List<BookEntity> books = visibleSeriesBooks(seriesId, accessResolver.current());
+        return books.isEmpty() ? null : contentGateway.thumbnail(books.getFirst().getId());
+    }
+
+    /** Visible books of a series, sorted by number; empty when the series is unknown or hidden. */
+    private List<BookEntity> visibleSeriesBooks(String seriesId, KomgaAccess access) {
+        return seriesFinder.resolve(seriesId, access, settings.groupUnknown())
+                .map(ResolvedSeries::books)
+                .orElse(List.of());
     }
 
     /** Pages the series, loading the books of the series on the requested page only. */
     private KomgaPageableDto<KomgaSeriesDto> seriesPage(List<SeriesKey> series, int page, int size,
                                                         boolean unpaged, boolean groupUnknown, KomgaAccess access) {
         return KomgaPaging.page(series, page, size, unpaged, pageSeries -> {
-            List<KomgaSeriesDto> content = new ArrayList<>();
+            Map<SeriesKey, List<BookEntity>> booksBySeries = new LinkedHashMap<>();
             for (SeriesKey ref : pageSeries) {
                 try {
-                    List<BookEntity> seriesBooks = seriesFinder.visibleBooks(ref, access, groupUnknown);
+                    booksBySeries.put(ref, seriesFinder.visibleBooks(ref, access, groupUnknown));
+                } catch (Exception e) {
+                    log.error("Error loading series: {}", ref.name(), e);
+                }
+            }
+            // One progress lookup for the whole page
+            ProgressSnapshot progress = progressReader.load(access,
+                    booksBySeries.values().stream().flatMap(List::stream).toList());
+
+            List<KomgaSeriesDto> content = new ArrayList<>();
+            booksBySeries.forEach((ref, seriesBooks) -> {
+                try {
                     if (!seriesBooks.isEmpty()) {
                         Long libId = seriesBooks.getFirst().getLibrary().getId();
-                        KomgaSeriesDto seriesDto = komgaMapper.toKomgaSeriesDto(ref.name(), libId, seriesBooks);
+                        KomgaSeriesDto seriesDto = komgaMapper.toKomgaSeriesDto(ref.name(), libId, seriesBooks,
+                                progress.counts(seriesBooks));
                         if (seriesDto != null) {
                             content.add(seriesDto);
                         }
@@ -124,7 +146,7 @@ public class KomgaSeriesService {
                 } catch (Exception e) {
                     log.error("Error mapping series: {}", ref.name(), e);
                 }
-            }
+            });
             log.debug("Mapped {} series DTOs for this page", content.size());
             return content;
         });

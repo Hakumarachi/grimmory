@@ -10,6 +10,8 @@ import org.booklore.komga.dto.KomgaBookDto;
 import org.booklore.komga.dto.KomgaPageDto;
 import org.booklore.komga.dto.KomgaPageableDto;
 import org.booklore.komga.mapper.KomgaMapper;
+import org.booklore.komga.progress.KomgaProgressReader;
+import org.booklore.komga.progress.ProgressSnapshot;
 import org.booklore.komga.repository.KomgaBookRepository;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -44,6 +46,7 @@ public class KomgaBookService {
     private final KomgaMapper komgaMapper;
     private final KomgaAccessResolver accessResolver;
     private final KomgaContentGateway contentGateway;
+    private final KomgaProgressReader progressReader;
 
     public KomgaPageableDto<KomgaBookDto> getAllBooks(Long libraryId, int requestedPage, int requestedSize) {
         int page = KomgaPaging.pageNumber(requestedPage);
@@ -63,8 +66,9 @@ public class KomgaBookService {
             bookPage = komgaBookRepository.findAllWithMetadataPaged(pageable);
         }
 
+        ProgressSnapshot progress = progressReader.load(access, bookPage.getContent());
         List<KomgaBookDto> content = bookPage.getContent().stream()
-                .map(komgaMapper::toKomgaBookDto)
+                .map(book -> komgaMapper.toKomgaBookDto(book, progress.of(book)))
                 .toList();
 
         return KomgaPageableDto.<KomgaBookDto>builder()
@@ -81,8 +85,9 @@ public class KomgaBookService {
     }
 
     public KomgaBookDto getBookById(Long bookId) {
-        BookEntity book = accessResolver.requireVisibleBook(bookId);
-        return komgaMapper.toKomgaBookDto(book);
+        KomgaAccess access = accessResolver.current();
+        BookEntity book = accessResolver.requireVisibleBook(bookId, access);
+        return komgaMapper.toKomgaBookDto(book, progressReader.load(access, List.of(book)).of(book));
     }
 
     public List<KomgaPageDto> getBookPages(Long bookId) {

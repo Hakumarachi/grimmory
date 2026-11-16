@@ -66,7 +66,11 @@ public class KomgaAccessResolver {
 
     /** Loads a book the current user may see, or answers 404 (the book's existence is not disclosed). */
     public BookEntity requireVisibleBook(Long bookId) {
-        KomgaAccess access = current();
+        return requireVisibleBook(bookId, current());
+    }
+
+    /** Same as {@link #requireVisibleBook(Long)}, for an access already resolved. */
+    public BookEntity requireVisibleBook(Long bookId, KomgaAccess access) {
         return komgaBookRepository.findByIdWithBookFiles(bookId)
                 .filter(book -> access.admin()
                         || (book.getLibrary() != null && access.canSeeLibrary(book.getLibrary().getId())))

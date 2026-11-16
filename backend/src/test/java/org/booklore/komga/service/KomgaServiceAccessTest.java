@@ -5,6 +5,13 @@ import org.booklore.komga.mapper.KomgaMapper;
 import org.booklore.komga.access.KomgaAccessResolver;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaProgressGateway;
+import org.booklore.komga.progress.BookProgress;
+import org.booklore.komga.progress.KomgaProgressReader;
+import org.booklore.komga.progress.KomgaReadState;
+import org.booklore.komga.progress.ReadCounts;
+import org.booklore.model.entity.UserBookProgressEntity;
+import org.booklore.model.enums.ReadStatus;
 import org.booklore.komga.core.KomgaSettingsGateway;
 import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.model.dto.BookLoreUser;
@@ -36,6 +43,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -70,6 +78,9 @@ class KomgaServiceAccessTest {
     @Mock
     private KomgaContentGateway contentGateway;
 
+    @Mock
+    private KomgaProgressGateway progressGateway;
+
     private KomgaLibraryService libraryService;
     private KomgaSeriesService seriesService;
     private KomgaBookService bookService;
@@ -81,18 +92,19 @@ class KomgaServiceAccessTest {
     void setUp() {
         KomgaAccessResolver accessResolver = new KomgaAccessResolver(accessGateway, komgaBookRepository);
         libraryService = new KomgaLibraryService(komgaLibraryRepository, komgaMapper, accessResolver);
+        KomgaProgressReader progressReader = new KomgaProgressReader(progressGateway);
         seriesService = new KomgaSeriesService(new KomgaSeriesFinder(komgaBookRepository, accessResolver),
-                komgaMapper, accessResolver, settings, contentGateway);
-        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway);
+                komgaMapper, accessResolver, settings, contentGateway, progressReader);
+        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway, progressReader);
         lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         lenient().when(settings.groupUnknown()).thenReturn(true);
-        lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any()))
+        lenient().when(komgaMapper.toKomgaSeriesDto(anyString(), anyLong(), any(), any()))
                 .thenAnswer(inv -> KomgaSeriesDto.builder()
                         .name(inv.getArgument(0))
                         .libraryId(String.valueOf((Long) inv.getArgument(1)))
                         .booksCount(((List<?>) inv.getArgument(2)).size())
                         .build());
-        lenient().when(komgaMapper.toKomgaBookDto(any()))
+        lenient().when(komgaMapper.toKomgaBookDto(any(), any()))
                 .thenAnswer(inv -> KomgaBookDto.builder().id(((BookEntity) inv.getArgument(0)).getId().toString()).build());
         lenient().when(komgaMapper.toKomgaLibraryDto(any()))
                 .thenAnswer(inv -> KomgaLibraryDto.builder().id(((LibraryEntity) inv.getArgument(0)).getId().toString()).build());
@@ -256,6 +268,30 @@ class KomgaServiceAccessTest {
                 .extracting(KomgaBookDto::getId).containsExactly("101", "102");
     }
 
+    // ==================== Progress ====================
+
+    @Test
+    void seriesCountsAndBookProgressAreThoseOfTheCurrentUser() {
+        loginAsUser(1L);
+        seriesIn(1L, "Akira", 101L, 102L, 103L);
+        seriesIn(1L, "Blame", 104L);
+        when(progressGateway.bookProgress(eq(10L), anySet())).thenReturn(Map.of(
+                101L, progress(101L, ReadStatus.READ),
+                102L, progress(102L, ReadStatus.READING),
+                104L, progress(104L, ReadStatus.WONT_READ)));
+
+        seriesService.getAllSeries(null, 0, 20, false);
+
+        // One progress lookup for the whole page, not one per series
+        verify(progressGateway).bookProgress(10L, Set.of(101L, 102L, 103L, 104L));
+        verify(komgaMapper).toKomgaSeriesDto(eq("Akira"), eq(1L), anyList(), eq(new ReadCounts(1, 1, 1)));
+        verify(komgaMapper).toKomgaSeriesDto(eq("Blame"), eq(1L), anyList(), eq(new ReadCounts(0, 1, 0)));
+
+        seriesService.getBooksBySeries("1-akira", 0, 20, false);
+        verify(komgaMapper).toKomgaBookDto(eq(book(101L)), argThat(p -> p.state() == KomgaReadState.READ));
+        verify(komgaMapper).toKomgaBookDto(eq(book(103L)), eq(BookProgress.NONE));
+    }
+
     // ==================== Books ====================
 
     @Test
@@ -350,6 +386,10 @@ class KomgaServiceAccessTest {
         List<BookEntity> seriesBooks = java.util.Arrays.stream(bookIds).map(this::book).toList();
         seriesBooks.forEach(b -> b.setMetadata(BookMetadataEntity.builder().seriesName(name).build()));
         lenient().when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId(name, libraryId, UNKNOWN)).thenReturn(seriesBooks);
+    }
+
+    private UserBookProgressEntity progress(Long bookId, ReadStatus status) {
+        return UserBookProgressEntity.builder().book(book(bookId)).readStatus(status).build();
     }
 
     private BookEntity book(Long id) {

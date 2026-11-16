@@ -4,6 +4,8 @@ import org.booklore.komga.mapper.KomgaMapper;
 import org.booklore.komga.access.KomgaAccessResolver;
 import org.booklore.komga.core.KomgaAccessGateway;
 import org.booklore.komga.core.KomgaContentGateway;
+import org.booklore.komga.core.KomgaProgressGateway;
+import org.booklore.komga.progress.KomgaProgressReader;
 import org.booklore.komga.core.KomgaSettingsGateway;
 import org.booklore.komga.repository.KomgaLibraryRepository;
 import org.booklore.model.dto.BookLoreUser;
@@ -55,6 +57,9 @@ class KomgaServiceTest {
     @Mock
     private KomgaContentGateway contentGateway;
 
+    @Mock
+    private KomgaProgressGateway progressGateway;
+
     private KomgaLibraryService libraryService;
     private KomgaSeriesService seriesService;
     private KomgaBookService bookService;
@@ -66,9 +71,10 @@ class KomgaServiceTest {
     void setUp() {
         KomgaAccessResolver accessResolver = new KomgaAccessResolver(accessGateway, komgaBookRepository);
         libraryService = new KomgaLibraryService(komgaLibraryRepository, komgaMapper, accessResolver);
+        KomgaProgressReader progressReader = new KomgaProgressReader(progressGateway);
         seriesService = new KomgaSeriesService(new KomgaSeriesFinder(komgaBookRepository, accessResolver),
-                komgaMapper, accessResolver, settings, contentGateway);
-        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway);
+                komgaMapper, accessResolver, settings, contentGateway, progressReader);
+        bookService = new KomgaBookService(komgaBookRepository, komgaMapper, accessResolver, contentGateway, progressReader);
         lenient().when(accessGateway.restrictionSpecification(any())).thenReturn((root, query, cb) -> cb.conjunction());
         library = new LibraryEntity();
         library.setId(1L);
@@ -124,7 +130,7 @@ class KomgaServiceTest {
                     .id(book.getId().toString())
                     .name(book.getMetadata().getTitle())
                     .build();
-            when(komgaMapper.toKomgaBookDto(book)).thenReturn(dto);
+            when(komgaMapper.toKomgaBookDto(eq(book), any())).thenReturn(dto);
         }
 
         // When: Request with unpaged=true
@@ -154,7 +160,7 @@ class KomgaServiceTest {
                     .id(book.getId().toString())
                     .name(book.getMetadata().getTitle())
                     .build();
-            when(komgaMapper.toKomgaBookDto(book)).thenReturn(dto);
+            when(komgaMapper.toKomgaBookDto(eq(book), any())).thenReturn(dto);
         }
 
         // When: Request with unpaged=false and page size 20
@@ -231,9 +237,9 @@ class KomgaServiceTest {
         when(komgaBookRepository.findBooksBySeriesNameGroupedByLibraryId("Series B", 1L, "Unknown Series"))
                 .thenReturn(seriesBBooks);
         
-        when(komgaMapper.toKomgaSeriesDto(eq("Series A"), anyLong(), any()))
+        when(komgaMapper.toKomgaSeriesDto(eq("Series A"), anyLong(), any(), any()))
                 .thenReturn(KomgaSeriesDto.builder().id("1-series-a").name("Series A").booksCount(2).build());
-        when(komgaMapper.toKomgaSeriesDto(eq("Series B"), anyLong(), any()))
+        when(komgaMapper.toKomgaSeriesDto(eq("Series B"), anyLong(), any(), any()))
                 .thenReturn(KomgaSeriesDto.builder().id("1-series-b").name("Series B").booksCount(2).build());
         
         // When: Request first page with size 2

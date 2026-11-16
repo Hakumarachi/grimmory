@@ -10,6 +10,8 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.komga.core.KomgaSettingsGateway;
 import org.booklore.komga.series.SeriesIdCodec;
 import org.booklore.komga.series.SeriesNaming;
+import org.booklore.komga.progress.BookProgress;
+import org.booklore.komga.progress.ReadCounts;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -40,11 +42,13 @@ public class KomgaMapper {
                 .build();
     }
 
-    public KomgaBookDto toKomgaBookDto(BookEntity book) {
+    /** Komga book, with the current user's progress on it ({@link BookProgress#NONE} when unread). */
+    public KomgaBookDto toKomgaBookDto(BookEntity book, BookProgress progress) {
         BookMetadataEntity metadata = book.getMetadata();
         BookFileEntity bookFile = book.getPrimaryBookFile();
         String seriesId = generateSeriesId(book);
-        
+        KomgaMediaDto media = toKomgaMediaDto(book, metadata);
+
         return KomgaBookDto.builder()
                 .id(book.getId().toString())
                 .seriesId(seriesId)
@@ -60,15 +64,17 @@ public class KomgaMapper {
                 .fileLastModified(book.getAddedOn())
                 .sizeBytes(bookFile.getFileSizeKb() != null ? bookFile.getFileSizeKb() * 1024 : 0L)
                 .size(formatFileSize(bookFile.getFileSizeKb()))
-                .media(toKomgaMediaDto(book, metadata))
+                .media(media)
                 .metadata(toKomgaBookMetadataDto(metadata))
+                .readProgress(progress.toDto(media.getPagesCount()))
                 .deleted(book.getDeleted())
                 .fileHash(bookFile.getCurrentHash())
                 .oneshot(false)
                 .build();
     }
 
-    public KomgaSeriesDto toKomgaSeriesDto(String seriesName, Long libraryId, List<BookEntity> books) {
+    /** Komga series of the given books, with the current user's read counts. */
+    public KomgaSeriesDto toKomgaSeriesDto(String seriesName, Long libraryId, List<BookEntity> books, ReadCounts counts) {
         if (books == null || books.isEmpty()) {
             return null;
         }
@@ -89,9 +95,9 @@ public class KomgaMapper {
                 .lastModified(firstBook.getAddedOn())
                 .fileLastModified(firstBook.getAddedOn())
                 .booksCount(books.size())
-                .booksReadCount(0)
-                .booksUnreadCount(books.size())
-                .booksInProgressCount(0)
+                .booksReadCount(counts.read())
+                .booksUnreadCount(counts.unread())
+                .booksInProgressCount(counts.inProgress())
                 .metadata(metadata)
                 .booksMetadata(booksMetadata)
                 .deleted(false)

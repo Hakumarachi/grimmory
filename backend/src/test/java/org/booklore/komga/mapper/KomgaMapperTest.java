@@ -1,5 +1,7 @@
 package org.booklore.komga.mapper;
 
+import org.booklore.komga.progress.BookProgress;
+import org.booklore.komga.progress.ReadCounts;
 import org.booklore.komga.web.json.KomgaCleanContext;
 import org.booklore.komga.dto.KomgaBookDto;
 import org.booklore.komga.dto.KomgaSeriesDto;
@@ -75,7 +77,7 @@ class KomgaMapperTest {
         book.setBookFiles(Set.of(pdf));
 
         // When: Converting to DTO
-        KomgaBookDto dto = mapper.toKomgaBookDto(book);
+        KomgaBookDto dto = mapper.toKomgaBookDto(book, BookProgress.NONE);
 
         // Then: Should not throw NPE and pageCount should default to 0
         assertThat(dto).isNotNull();
@@ -106,7 +108,7 @@ class KomgaMapperTest {
         book.setBookFiles(Set.of(pdf));
 
         // When: Converting to DTO
-        KomgaBookDto dto = mapper.toKomgaBookDto(book);
+        KomgaBookDto dto = mapper.toKomgaBookDto(book, BookProgress.NONE);
 
         // Then: Should not throw NPE and pageCount should default to 0
         assertThat(dto).isNotNull();
@@ -143,7 +145,7 @@ class KomgaMapperTest {
         book.setBookFiles(Set.of(pdf));
 
         // When: Converting to DTO
-        KomgaBookDto dto = mapper.toKomgaBookDto(book);
+        KomgaBookDto dto = mapper.toKomgaBookDto(book, BookProgress.NONE);
 
         // Then: Should use the actual pageCount
         assertThat(dto).isNotNull();
@@ -187,7 +189,7 @@ class KomgaMapperTest {
         books.add(book);
         
         // When: Converting to series DTO
-        KomgaSeriesDto seriesDto = mapper.toKomgaSeriesDto("Test Series", 1L, books);
+        KomgaSeriesDto seriesDto = mapper.toKomgaSeriesDto("Test Series", 1L, books, new ReadCounts(0, books.size(), 0));
         
         // Then: Empty fields should be null (not empty strings) in clean mode
         assertThat(seriesDto).isNotNull();
@@ -233,7 +235,7 @@ class KomgaMapperTest {
         books.add(book);
         
         // When: Converting to series DTO
-        KomgaSeriesDto seriesDto = mapper.toKomgaSeriesDto("Test Series", 1L, books);
+        KomgaSeriesDto seriesDto = mapper.toKomgaSeriesDto("Test Series", 1L, books, new ReadCounts(0, books.size(), 0));
         
         // Then: Empty fields should have default values (not null)
         assertThat(seriesDto).isNotNull();
